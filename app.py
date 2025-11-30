@@ -29,8 +29,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
 import html as html_module
 
-# Lazy import of SentenceTransformer to avoid heavy startup cost until needed.
-# We'll import inside a getter.
+# SBERT model name (small, good for CPU)
 SBERT_MODEL_NAME = os.environ.get("SBERT_MODEL", "all-MiniLM-L6-v2")
 
 # ---------- Configuration ----------
@@ -43,11 +42,14 @@ SIMILARITY_THRESHOLD = 0.1
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
-# ---------- Ensure NLTK punkt is available ----------
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt")
+# ---------- Ensure NLTK resources are available ----------
+# Newer NLTK (3.9+) also needs "punkt_tab" in addition to "punkt"
+for resource in ("punkt", "punkt_tab"):
+    try:
+        # If not found, this raises LookupError
+        nltk.data.find(f"tokenizers/{resource}")
+    except LookupError:
+        nltk.download(resource)
 
 # ---------- Lazy model holder ----------
 _sbert_model = None
@@ -56,12 +58,10 @@ _sbert_model = None
 def get_sbert_model():
     """
     Load SentenceTransformer model on first use to reduce import-time memory.
-    This keeps the module import light for Gunicorn/Render until the first request.
     """
     global _sbert_model
     if _sbert_model is None:
         try:
-            # Import here to avoid heavy imports at module import time
             from sentence_transformers import SentenceTransformer
         except Exception as e:
             raise RuntimeError(f"sentence-transformers not installed or failed to import: {e}")
@@ -86,7 +86,6 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
                 page_text = page.extract_text() or ""
                 text_parts.append(page_text)
     except Exception as e:
-        # log warning and continue with whatever text was collected
         app.logger.warning(f"pdfplumber extraction warning: {e}")
     return "\n\n".join(text_parts).strip()
 
@@ -123,8 +122,12 @@ def run_textrank_on_sentences(sentences: List[str], ratio: float = DEFAULT_SUMMA
     if not sentences:
         return [], []
     model = get_sbert_model()
-    # encode and normalize embeddings for cosine similarity
-    embeddings = model.encode(sentences, convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True)
+    embeddings = model.encode(
+        sentences,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+        normalize_embeddings=True,
+    )
     G = build_similarity_graph(embeddings)
     try:
         scores = nx.pagerank(G, weight="weight")
@@ -165,7 +168,7 @@ INDEX_HTML = """
       textarea{width:100%;min-height:160px;padding:.6rem;border-radius:8px;border:1px solid #e6eef8}
       .small{font-size:.9rem;color:#445}
       .result{margin-top:1rem;padding:1rem;border-radius:8px;background:#fcfeff;border:1px solid #e6eef8}
-      mark{background: #fff8b0}
+      mark{background:#fff8b0}
       footer{margin-top:1rem;color:#657}
       .controls{display:flex;gap:.5rem;align-items:center}
       input[type=number]{width:80px;padding:.4rem;border-radius:8px;border:1px solid #e6eef8}
@@ -296,7 +299,6 @@ def summarize_route():
 
     summary_sentences, selected_indices = run_textrank_on_sentences(sentences, ratio=ratio)
 
-    # Build highlighted HTML (escape for safety)
     selected_set = set(selected_indices)
     highlighted_parts = []
     for idx, sent in enumerate(sentences):
@@ -309,7 +311,6 @@ def summarize_route():
 
     summary_text = "\n\n".join(summary_sentences)
 
-    # Save temporary file for download
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="summary_")
     try:
         tmp.write(summary_text.encode("utf-8"))
@@ -318,8 +319,9 @@ def summarize_route():
     finally:
         tmp.close()
 
-    DOWNLOAD_REGISTRY[os.path.basename(tmp_path)] = tmp_path
-    download_url = f"/download_summary/{os.path.basename(tmp_path)}"
+    fname = os.path.basename(tmp_path)
+    DOWNLOAD_REGISTRY[fname] = tmp_path
+    download_url = f"/download_summary/{fname}"
 
     response = {
         "summary_text": summary_text,
@@ -340,7 +342,6 @@ def download_summary(fname: str):
     return send_file(path, as_attachment=True, download_name="summary.txt")
 
 
-# WSGI entrypoint for gunicorn/render
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
