@@ -485,7 +485,14 @@ RESULT_HTML = """
         font-size: 0.95rem;
         line-height: 1.6;
         color: #111827;
-        white-space: pre-wrap;
+      }
+
+      .summary-text p {
+        margin-bottom: 0.6rem;
+      }
+
+      .summary-text p:last-child {
+        margin-bottom: 0;
       }
 
       .note {
@@ -576,7 +583,11 @@ RESULT_HTML = """
 
     <div class="summary-card">
       <h2>Summary</h2>
-      <div class="summary-text">{{ summary }}</div>
+      <div class="summary-text">
+        {% for sent in summary_sentences %}
+          <p>{{ loop.index }}. {{ sent }}</p>
+        {% endfor %}
+      </div>
     </div>
 
     <p class="note">
@@ -614,10 +625,8 @@ def split_into_sentences(text: str):
     Lightweight rule-based sentence splitter.
     Designed to avoid external model downloads (no NLTK data).
     """
-    # Ensure newline-separated paragraphs don't break logic
     text = re.sub(r"\n+", " ", text)
 
-    # Split on sentence-ending punctuation followed by space + capital letter or end of string
     sentence_endings = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
     rough_sentences = sentence_endings.split(text)
 
@@ -626,11 +635,21 @@ def split_into_sentences(text: str):
         s = s.strip()
         if len(s) < 2:
             continue
-        # Remove stray bullet characters commonly seen in policy briefs
         s = re.sub(r"^[•\-\–\*]+\s*", "", s)
         if s:
             sentences.append(s)
     return sentences
+
+
+def is_toc_like(sentence: str) -> bool:
+    """
+    Heuristic filter: skip very 'table-of-contents' style lines
+    with many digits and section numbers.
+    """
+    digits = sum(ch.isdigit() for ch in sentence)
+    if digits >= 8 and len(sentence) > 80:
+        return True
+    return False
 
 
 # -------------------- PDF Extraction -------------------- #
@@ -674,7 +693,7 @@ def compute_textrank_scores(sim_matrix: np.ndarray):
     """
     Build a graph from cosine similarity matrix and run TextRank (PageRank).
     """
-    np.fill_diagonal(sim_matrix, 0.0)  # Avoid self-loops biasing PageRank
+    np.fill_diagonal(sim_matrix, 0.0)
     graph = nx.from_numpy_array(sim_matrix)
     scores = nx.pagerank(graph, max_iter=200, tol=1e-6)
     return scores
@@ -683,17 +702,11 @@ def compute_textrank_scores(sim_matrix: np.ndarray):
 def mmr_selection(scores_dict, sim_matrix, summary_size, lambda_param=0.7):
     """
     Maximal Marginal Relevance (MMR) for redundancy reduction.
-    - scores_dict: TextRank scores (importance) for each sentence index.
-    - sim_matrix: cosine similarity matrix between sentences.
-    - summary_size: number of sentences to select.
-    - lambda_param: trade-off between relevance and diversity (0–1).
     """
     n_sentences = sim_matrix.shape[0]
     indices = np.arange(n_sentences)
 
-    # Convert scores dict to ordered numpy array
     scores = np.array([scores_dict.get(i, 0.0) for i in range(n_sentences)], dtype=float)
-    # Normalize scores to [0, 1]
     if scores.max() > 0:
         scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
     else:
@@ -705,7 +718,6 @@ def mmr_selection(scores_dict, sim_matrix, summary_size, lambda_param=0.7):
     if summary_size >= n_sentences:
         return list(indices)
 
-    # Precompute to be safe
     sim_matrix = sim_matrix.copy()
     np.fill_diagonal(sim_matrix, 0.0)
 
@@ -721,7 +733,6 @@ def mmr_selection(scores_dict, sim_matrix, summary_size, lambda_param=0.7):
             mmr_score = lambda_param * scores[i] - (1 - lambda_param) * diversity_penalty
             mmr_scores[i] = mmr_score
 
-        # Choose candidate with max MMR
         best_idx = max(mmr_scores, key=mmr_scores.get)
         selected.append(best_idx)
         candidate_idxs.remove(best_idx)
@@ -739,26 +750,28 @@ def summarize_document(text: str, length_choice: str = "medium"):
       5. Reorder selected sentences to original order
     """
     cleaned = normalize_whitespace(text)
-    sentences = split_into_sentences(cleaned)
+    sentences_all = split_into_sentences(cleaned)
+
+    # Filter out TOC-like sentences (optional, helps with policy PDFs)
+    sentences = [s for s in sentences_all if not is_toc_like(s)]
 
     if not sentences:
         raise ValueError("No valid sentences found in the document.")
 
     n_sent = len(sentences)
 
-    # If very short document, just return as-is
     if n_sent <= 3:
-        summary_text = " ".join(sentences)
+        summary_sentences = sentences
+        summary_text = " ".join(summary_sentences)
         stats = {
             "original_sentences": n_sent,
-            "summary_sentences": n_sent,
+            "summary_sentences": len(summary_sentences),
             "original_chars": len(cleaned),
             "summary_chars": len(summary_text),
             "compression_ratio": 100,
         }
-        return summary_text, stats
+        return summary_text, summary_sentences, stats
 
-    # Determine summary length based on user choice
     length_choice = (length_choice or "medium").lower()
     if length_choice == "short":
         ratio = 0.15
@@ -773,16 +786,12 @@ def summarize_document(text: str, length_choice: str = "medium"):
     target_count = max(1, int(round(n_sent * ratio)))
     target_count = min(target_count, max_sents, n_sent)
 
-    # TF-IDF embeddings
     tfidf_matrix = build_tfidf_matrix(sentences)
 
-    # Cosine similarity matrix
     sim_matrix = cosine_similarity(tfidf_matrix)
 
-    # TextRank sentence importance
     textrank_scores = compute_textrank_scores(sim_matrix)
 
-    # MMR selection for redundancy reduction
     selected_indices = mmr_selection(
         scores_dict=textrank_scores,
         sim_matrix=sim_matrix,
@@ -790,7 +799,6 @@ def summarize_document(text: str, length_choice: str = "medium"):
         lambda_param=0.7,
     )
 
-    # Reorder selected sentences according to original order
     selected_indices_sorted = sorted(selected_indices)
     summary_sentences = [sentences[i].strip() for i in selected_indices_sorted]
     summary_text = " ".join(summary_sentences)
@@ -805,7 +813,7 @@ def summarize_document(text: str, length_choice: str = "medium"):
         "compression_ratio": compression_ratio,
     }
 
-    return summary_text, stats
+    return summary_text, summary_sentences, stats
 
 
 # -------------------- Flask Routes -------------------- #
@@ -842,16 +850,22 @@ def summarize():
     length_choice = request.form.get("length", "medium")
 
     try:
-        summary_text, stats = summarize_document(raw_text, length_choice=length_choice)
+        summary_text, summary_sentences, stats = summarize_document(
+            raw_text, length_choice=length_choice
+        )
     except Exception as e:
         abort(500, description=f"Error during summarization: {e}")
 
-    return render_template_string(RESULT_HTML, summary=summary_text, stats=stats)
+    return render_template_string(
+        RESULT_HTML,
+        summary_text=summary_text,
+        summary_sentences=summary_sentences,
+        stats=stats,
+    )
 
 
 # -------------------- Entry Point -------------------- #
 
 if __name__ == "__main__":
-    # For local testing; on Render, you will typically use: gunicorn app:app
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
