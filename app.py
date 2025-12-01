@@ -1,347 +1,857 @@
-"""
-app.py
-
-Flask app for an unsupervised extractive summarizer using:
-  - Sentence-BERT (sentence-transformers)
-  - Semantic TextRank (PageRank on SBERT similarity graph)
-
-Features:
-  - Accepts PDF uploads (.pdf) or plain text (.txt or pasted text)
-  - Extracts text from PDFs using pdfplumber
-  - Splits into sentences (NLTK)
-  - Builds SBERT sentence embeddings (lazy-loaded)
-  - Builds similarity graph and runs PageRank -> sentence ranking
-  - Returns extractive summary (keeps original order for coherence)
-  - Provides simple single-file UI and download for the summary
-"""
-
-import os
 import io
-import math
-import tempfile
-from typing import List, Tuple, Dict
+import os
+import re
 
-from flask import Flask, request, render_template_string, abort, jsonify, send_file
-import pdfplumber
-import nltk
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
-import html as html_module
+from flask import Flask, request, render_template_string, abort
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from PyPDF2 import PdfReader
 
-# SBERT model name (small, good for CPU)
-SBERT_MODEL_NAME = os.environ.get("SBERT_MODEL", "all-MiniLM-L6-v2")
-
-# ---------- Configuration ----------
-MAX_CONTENT_LENGTH = 30 * 1024 * 1024  # 30 MB
-ALLOWED_EXTENSIONS = {"pdf", "txt"}
-DEFAULT_SUMMARY_RATIO = 0.25
-MIN_SENTENCE_WORDS = 3
-SIMILARITY_THRESHOLD = 0.1
+# -------------------- Flask App -------------------- #
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
-# ---------- Ensure NLTK resources are available ----------
-# Newer NLTK (3.9+) also needs "punkt_tab" in addition to "punkt"
-for resource in ("punkt", "punkt_tab"):
-    try:
-        # If not found, this raises LookupError
-        nltk.data.find(f"tokenizers/{resource}")
-    except LookupError:
-        nltk.download(resource)
+# -------------------- HTML Templates -------------------- #
 
-# ---------- Lazy model holder ----------
-_sbert_model = None
+INDEX_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Policy Brief Summarizer - Primary Healthcare</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      :root {
+        --primary-color: #2563eb;
+        --secondary-color: #1d4ed8;
+        --bg-color: #0f172a;
+        --card-bg: #ffffff;
+        --accent: #22c55e;
+        --danger: #ef4444;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top left,#2563eb,#0f172a 40%,#020617);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        color: #0f172a;
+      }
+
+      .container {
+        width: 100%;
+        max-width: 900px;
+        background: rgba(255,255,255,0.98);
+        border-radius: 1.5rem;
+        padding: 2rem 2.5rem;
+        box-shadow: 0 25px 80px rgba(15,23,42,0.45);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .badge {
+        position: absolute;
+        top: 1.25rem;
+        right: 1.5rem;
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        border: 1px solid rgba(37,99,235,0.25);
+        background: rgba(239,246,255,0.9);
+        color: #1d4ed8;
+      }
+
+      h1 {
+        font-size: 1.9rem;
+        margin-bottom: 0.4rem;
+        color: #0f172a;
+      }
+
+      .subtitle {
+        font-size: 0.95rem;
+        color: #64748b;
+        margin-bottom: 1.5rem;
+      }
+
+      .subtitle span {
+        background: #eff6ff;
+        color: #1d4ed8;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        margin-left: 0.4rem;
+      }
+
+      form {
+        margin-top: 0.75rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr;
+        gap: 1.5rem;
+      }
+
+      .upload-area {
+        border: 2px dashed rgba(148,163,184,0.9);
+        border-radius: 1rem;
+        padding: 1.25rem;
+        text-align: center;
+        background: #f8fafc;
+        transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
+        cursor: pointer;
+      }
+
+      .upload-area.dragover {
+        border-color: var(--primary-color);
+        background: #eff6ff;
+        transform: translateY(-1px);
+      }
+
+      .upload-area h2 {
+        font-size: 1rem;
+        margin-bottom: 0.25rem;
+      }
+
+      .upload-area p {
+        font-size: 0.85rem;
+        color: #64748b;
+      }
+
+      .upload-area span.browse {
+        color: var(--primary-color);
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .file-meta {
+        margin-top: 0.75rem;
+        font-size: 0.85rem;
+        color: #0f172a;
+        background: #e5f0ff;
+        padding: 0.4rem 0.7rem;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+
+      .file-meta strong {
+        font-weight: 600;
+      }
+
+      .file-meta small {
+        color: #4b5563;
+      }
+
+      .options-card {
+        background: #f9fafb;
+        border-radius: 1rem;
+        padding: 1rem 1.25rem;
+        border: 1px solid #e5e7eb;
+      }
+
+      .options-card h3 {
+        font-size: 0.95rem;
+        margin-bottom: 0.75rem;
+        color: #111827;
+      }
+
+      .radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        font-size: 0.87rem;
+        color: #4b5563;
+      }
+
+      .radio-item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+
+      .radio-item input {
+        accent-color: var(--primary-color);
+      }
+
+      .radio-item span {
+        font-weight: 500;
+        color: #111827;
+      }
+
+      .helper {
+        font-size: 0.78rem;
+        color: #6b7280;
+        margin-top: 0.6rem;
+      }
+
+      .submit-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 1.5rem;
+      }
+
+      button[type="submit"] {
+        background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+        border: none;
+        color: white;
+        font-weight: 600;
+        font-size: 0.96rem;
+        padding: 0.75rem 1.4rem;
+        border-radius: 999px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        box-shadow: 0 12px 30px rgba(37,99,235,0.35);
+        transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+      }
+
+      button[type="submit"]:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+        box-shadow: 0 16px 40px rgba(37,99,235,0.45);
+      }
+
+      button[type="submit"]:active {
+        transform: translateY(0);
+        box-shadow: 0 10px 25px rgba(37,99,235,0.35);
+      }
+
+      .footer-note {
+        margin-top: 1rem;
+        font-size: 0.78rem;
+        color: #6b7280;
+      }
+
+      .footer-note code {
+        background: #f3f4f6;
+        padding: 0.15rem 0.35rem;
+        border-radius: 0.35rem;
+        font-size: 0.78rem;
+      }
+
+      @media (max-width: 768px) {
+        .container {
+          padding: 1.5rem 1.25rem;
+          border-radius: 1.25rem;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .badge {
+          position: static;
+          margin-bottom: 0.75rem;
+        }
+      }
+    </style>
+</head>
+<body>
+  <div class="container">
+    <div class="badge">Unsupervised • Extractive</div>
+    <h1>Policy Brief Summarizer</h1>
+    <p class="subtitle">
+      Automatic extractive summarization tailored for primary healthcare policy briefs.
+      <span>TF-IDF · TextRank · MMR</span>
+    </p>
+
+    <form id="upload-form" action="{{ url_for('summarize') }}" method="post" enctype="multipart/form-data">
+      <div class="grid">
+        <div>
+          <label for="file-input">
+            <div id="upload-area" class="upload-area">
+              <h2>Upload Policy Brief</h2>
+              <p>
+                Drag & drop a <strong>PDF</strong> or <strong>.txt</strong> file here<br>
+                or <span class="browse">browse from your system</span>
+              </p>
+              <input id="file-input" type="file" name="file" accept=".pdf,.txt" hidden required>
+              <div id="file-meta" class="file-meta" style="display:none;">
+                <strong id="file-name"></strong>
+                <small id="file-size"></small>
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div>
+          <div class="options-card">
+            <h3>Summary Length</h3>
+            <div class="radio-group">
+              <label class="radio-item">
+                <input type="radio" name="length" value="short">
+                <span>Short</span> (≈ 10–15% of sentences, max ~5)
+              </label>
+              <label class="radio-item">
+                <input type="radio" name="length" value="medium" checked>
+                <span>Medium</span> (≈ 20–25% of sentences, max ~10)
+              </label>
+              <label class="radio-item">
+                <input type="radio" name="length" value="long">
+                <span>Long</span> (≈ 30–35% of sentences, max ~15)
+              </label>
+            </div>
+            <p class="helper">
+              The system uses TF-IDF embeddings, a cosine-similarity graph + TextRank to score sentences,
+              and MMR to reduce redundancy before reordering selected sentences.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="submit-row">
+        <button type="submit">
+          🔍 Generate Summary
+        </button>
+      </div>
+    </form>
+
+    <p class="footer-note">
+      Note: Works best with structured policy briefs and reports (primary healthcare, guidelines, frameworks, etc.).
+      Large PDFs are automatically converted to text using <code>PyPDF2</code>.
+    </p>
+  </div>
+
+  <script>
+    const uploadArea = document.getElementById('upload-area');
+    const fileInput = document.getElementById('file-input');
+    const fileMeta = document.getElementById('file-meta');
+    const fileNameEl = document.getElementById('file-name');
+    const fileSizeEl = document.getElementById('file-size');
+
+    uploadArea.addEventListener('click', function() {
+      fileInput.click();
+    });
+
+    uploadArea.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      uploadArea.classList.add('dragover');
+    });
+
+    uploadArea.addEventListener('dragleave', function(e) {
+      e.preventDefault();
+      uploadArea.classList.remove('dragover');
+    });
+
+    uploadArea.addEventListener('drop', function(e) {
+      e.preventDefault();
+      uploadArea.classList.remove('dragover');
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        fileInput.files = files;
+        updateFileMeta(files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', function(e) {
+      if (e.target.files && e.target.files.length > 0) {
+        updateFileMeta(e.target.files[0]);
+      }
+    });
+
+    function updateFileMeta(file) {
+      fileNameEl.textContent = file.name;
+      const sizeKB = file.size / 1024;
+      if (sizeKB < 1024) {
+        fileSizeEl.textContent = "(" + sizeKB.toFixed(1) + " KB)";
+      } else {
+        fileSizeEl.textContent = "(" + (sizeKB / 1024).toFixed(2) + " MB)";
+      }
+      fileMeta.style.display = 'inline-flex';
+    }
+  </script>
+</body>
+</html>
+"""
+
+RESULT_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Summary • Policy Brief Summarizer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      :root {
+        --primary-color: #2563eb;
+        --secondary-color: #1d4ed8;
+        --bg-color: #0f172a;
+        --accent: #22c55e;
+        --muted: #6b7280;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top left,#2563eb,#0f172a 40%,#020617);
+        min-height: 100vh;
+        padding: 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .container {
+        width: 100%;
+        max-width: 1000px;
+        background: rgba(255,255,255,0.98);
+        border-radius: 1.5rem;
+        padding: 2rem 2.5rem;
+        box-shadow: 0 25px 80px rgba(15,23,42,0.5);
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: flex-start;
+        margin-bottom: 1.5rem;
+      }
+
+      h1 {
+        font-size: 1.6rem;
+        color: #0f172a;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: #eff6ff;
+        color: #1d4ed8;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-bottom: 1.25rem;
+        font-size: 0.82rem;
+        color: #4b5563;
+      }
+
+      .stat-chip {
+        background: #f3f4f6;
+        border-radius: 999px;
+        padding: 0.25rem 0.65rem;
+      }
+
+      .stat-chip strong {
+        color: #111827;
+      }
+
+      .summary-card {
+        background: #f9fafb;
+        border-radius: 1rem;
+        border: 1px solid #e5e7eb;
+        padding: 1rem 1.25rem;
+        max-height: 60vh;
+        overflow-y: auto;
+      }
+
+      .summary-card h2 {
+        font-size: 0.98rem;
+        margin-bottom: 0.65rem;
+        color: #111827;
+      }
+
+      .summary-text {
+        font-size: 0.95rem;
+        line-height: 1.6;
+        color: #111827;
+        white-space: pre-wrap;
+      }
+
+      .note {
+        margin-top: 0.9rem;
+        font-size: 0.78rem;
+        color: #6b7280;
+      }
+
+      .note strong {
+        color: #111827;
+      }
+
+      .actions {
+        margin-top: 1.75rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .back-btn {
+        background: #0f172a;
+        color: white;
+        border-radius: 999px;
+        padding: 0.6rem 1.4rem;
+        font-size: 0.9rem;
+        font-weight: 500;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        box-shadow: 0 10px 25px rgba(15,23,42,0.4);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+
+      .back-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 14px 30px rgba(15,23,42,0.5);
+      }
+
+      .algo-pill {
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      .algo-pill code {
+        background: #f3f4f6;
+        padding: 0.1rem 0.35rem;
+        border-radius: 0.35rem;
+        font-size: 0.78rem;
+      }
+
+      @media(max-width: 768px) {
+        .container {
+          padding: 1.5rem 1.25rem;
+        }
+
+        .header {
+          flex-direction: column;
+        }
+      }
+    </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>Extractive Summary</h1>
+        <div class="pill">Primary Healthcare • Policy Brief</div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-chip">
+        <strong>{{ stats.summary_sentences }}</strong> sentences in summary
+      </div>
+      <div class="stat-chip">
+        <strong>{{ stats.original_sentences }}</strong> sentences in original
+      </div>
+      <div class="stat-chip">
+        Compression: <strong>{{ stats.compression_ratio }}%</strong>
+      </div>
+      <div class="stat-chip">
+        Characters: <strong>{{ stats.summary_chars }}</strong> / {{ stats.original_chars }}
+      </div>
+    </div>
+
+    <div class="summary-card">
+      <h2>Summary</h2>
+      <div class="summary-text">{{ summary }}</div>
+    </div>
+
+    <p class="note">
+      <strong>How this was generated:</strong> Sentences were vectorized using TF-IDF.
+      A cosine-similarity graph was constructed, and TextRank (PageRank) was applied
+      to estimate sentence importance. Maximal Marginal Relevance (MMR) was then used
+      to remove redundancy and increase coverage, before restoring chronological order.
+    </p>
+
+    <div class="actions">
+      <a href="{{ url_for('index') }}" class="back-btn">
+        ← Summarize another document
+      </a>
+      <div class="algo-pill">
+        Using <code>TF-IDF</code> + <code>TextRank</code> + <code>MMR</code> (Unsupervised Extractive)
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+# -------------------- Text Utilities -------------------- #
 
 
-def get_sbert_model():
+def normalize_whitespace(text: str) -> str:
+    """Basic whitespace normalization."""
+    text = text.replace("\r", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def split_into_sentences(text: str):
     """
-    Load SentenceTransformer model on first use to reduce import-time memory.
+    Lightweight rule-based sentence splitter.
+    Designed to avoid external model downloads (no NLTK data).
     """
-    global _sbert_model
-    if _sbert_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-        except Exception as e:
-            raise RuntimeError(f"sentence-transformers not installed or failed to import: {e}")
-        try:
-            _sbert_model = SentenceTransformer(SBERT_MODEL_NAME)
-        except Exception as e:
-            raise RuntimeError(f"Failed to load SBERT model '{SBERT_MODEL_NAME}': {e}")
-    return _sbert_model
+    # Ensure newline-separated paragraphs don't break logic
+    text = re.sub(r"\n+", " ", text)
 
+    # Split on sentence-ending punctuation followed by space + capital letter or end of string
+    sentence_endings = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+    rough_sentences = sentence_endings.split(text)
 
-# ---------- Utilities ----------
-
-def allowed_file(filename: str) -> bool:
-    return bool(filename and "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS)
-
-
-def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    text_parts = []
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text() or ""
-                text_parts.append(page_text)
-    except Exception as e:
-        app.logger.warning(f"pdfplumber extraction warning: {e}")
-    return "\n\n".join(text_parts).strip()
-
-
-def split_into_sentences(text: str) -> List[str]:
-    raw_sentences = nltk.tokenize.sent_tokenize(text)
     sentences = []
-    for s in raw_sentences:
-        s_clean = " ".join(s.strip().split())
-        if len(s_clean.split()) >= MIN_SENTENCE_WORDS:
-            sentences.append(s_clean)
+    for s in rough_sentences:
+        s = s.strip()
+        if len(s) < 2:
+            continue
+        # Remove stray bullet characters commonly seen in policy briefs
+        s = re.sub(r"^[•\-\–\*]+\s*", "", s)
+        if s:
+            sentences.append(s)
     return sentences
 
 
-def build_similarity_graph(embeddings: np.ndarray, threshold: float = SIMILARITY_THRESHOLD) -> nx.Graph:
-    sim_matrix = cosine_similarity(embeddings)
-    n = sim_matrix.shape[0]
-    G = nx.Graph()
-    G.add_nodes_from(range(n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            score = float(sim_matrix[i, j])
-            if score > threshold:
-                G.add_edge(i, j, weight=score)
-    # If graph has no edges (rare), connect weakly so PageRank can run
-    if G.number_of_edges() == 0 and n > 1:
-        for i in range(n):
-            for j in range(i + 1, n):
-                G.add_edge(i, j, weight=float(sim_matrix[i, j]) + 1e-6)
-    return G
+# -------------------- PDF Extraction -------------------- #
 
 
-def run_textrank_on_sentences(sentences: List[str], ratio: float = DEFAULT_SUMMARY_RATIO) -> Tuple[List[str], List[int]]:
-    if not sentences:
-        return [], []
-    model = get_sbert_model()
-    embeddings = model.encode(
-        sentences,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-        normalize_embeddings=True,
-    )
-    G = build_similarity_graph(embeddings)
+def extract_text_from_pdf(file_storage) -> str:
+    """
+    Extracts text from an uploaded PDF using PyPDF2.
+    """
     try:
-        scores = nx.pagerank(G, weight="weight")
-    except Exception:
-        scores = nx.pagerank_numpy(G, weight="weight")
-    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    n_sentences = len(sentences)
-    k = max(1, int(math.ceil(n_sentences * ratio)))
-    top_indices = [idx for idx, _ in ranked[:k]]
-    top_indices_sorted = sorted(top_indices)
-    summary_sentences = [sentences[i] for i in top_indices_sorted]
-    return summary_sentences, top_indices_sorted
+        raw_bytes = file_storage.read()
+        reader = PdfReader(io.BytesIO(raw_bytes))
+        texts = []
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            texts.append(page_text)
+        return "\n".join(texts)
+    except Exception as e:
+        raise RuntimeError(f"Error reading PDF: {e}")
 
 
-# ---------- Simple download registry ----------
-DOWNLOAD_REGISTRY: Dict[str, str] = {}
+# -------------------- Summarization Core (TF-IDF + TextRank + MMR) -------------------- #
 
 
-# ---------- HTML UI ----------
-INDEX_HTML = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>SBERT + Semantic TextRank — Policy Brief Summarizer</title>
-    <style>
-      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;padding:2rem;background:#f3f6fb;color:#111}
-      .wrap{max-width:960px;margin:0 auto;background:white;border-radius:12px;padding:1.6rem;box-shadow:0 8px 30px rgba(35,40,50,0.07)}
-      header{display:flex;align-items:center;gap:1rem}
-      h1{margin:0;font-size:1.3rem}
-      p.lead{margin:0;color:#556}
-      form{margin-top:1rem;display:grid;gap:.75rem}
-      .row{display:flex;gap:.5rem;flex-wrap:wrap}
-      label{display:inline-block;padding:.6rem .8rem;background:#f1f5f9;border:1px dashed #e2e8f0;border-radius:8px;cursor:pointer}
-      input[type=file]{display:none}
-      button{padding:.6rem .9rem;border:0;background:#2563eb;color:white;border-radius:8px;cursor:pointer}
-      textarea{width:100%;min-height:160px;padding:.6rem;border-radius:8px;border:1px solid #e6eef8}
-      .small{font-size:.9rem;color:#445}
-      .result{margin-top:1rem;padding:1rem;border-radius:8px;background:#fcfeff;border:1px solid #e6eef8}
-      mark{background:#fff8b0}
-      footer{margin-top:1rem;color:#657}
-      .controls{display:flex;gap:.5rem;align-items:center}
-      input[type=number]{width:80px;padding:.4rem;border-radius:8px;border:1px solid #e6eef8}
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <header>
-        <div>
-          <h1>SBERT + Semantic TextRank</h1>
-          <p class="lead">Extractive summarizer for policy briefs & healthcare documents (PDF or text)</p>
-        </div>
-      </header>
+def build_tfidf_matrix(sentences):
+    """
+    Build TF-IDF matrix for sentences.
+    For policy briefs, we allow unigrams + bigrams and remove English stopwords.
+    """
+    vectorizer = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        max_df=0.9,
+        min_df=1
+    )
+    tfidf_matrix = vectorizer.fit_transform(sentences)
+    return tfidf_matrix
 
-      <form id="upload-form" method="post" action="/summarize" enctype="multipart/form-data">
-        <div class="row">
-          <label for="file">Select PDF / TXT
-            <input id="file" name="file" type="file" accept=".pdf,.txt">
-          </label>
 
-          <label for="text_input">Or paste text</label>
-        </div>
+def compute_textrank_scores(sim_matrix: np.ndarray):
+    """
+    Build a graph from cosine similarity matrix and run TextRank (PageRank).
+    """
+    np.fill_diagonal(sim_matrix, 0.0)  # Avoid self-loops biasing PageRank
+    graph = nx.from_numpy_array(sim_matrix)
+    scores = nx.pagerank(graph, max_iter=200, tol=1e-6)
+    return scores
 
-        <textarea id="text_input" name="text" placeholder="Paste policy brief or healthcare document text here (optional)"></textarea>
 
-        <div class="row controls">
-          <label class="small">Summary ratio (fraction of sentences to keep):</label>
-          <input type="number" name="ratio" step="0.05" min="0.05" max="1" value="0.25">
-          <button type="submit">Summarize</button>
-        </div>
+def mmr_selection(scores_dict, sim_matrix, summary_size, lambda_param=0.7):
+    """
+    Maximal Marginal Relevance (MMR) for redundancy reduction.
+    - scores_dict: TextRank scores (importance) for each sentence index.
+    - sim_matrix: cosine similarity matrix between sentences.
+    - summary_size: number of sentences to select.
+    - lambda_param: trade-off between relevance and diversity (0–1).
+    """
+    n_sentences = sim_matrix.shape[0]
+    indices = np.arange(n_sentences)
 
-        <p class="small">Tip: For PDFs, text extraction works best on digital PDFs (not scanned images).</p>
-      </form>
+    # Convert scores dict to ordered numpy array
+    scores = np.array([scores_dict.get(i, 0.0) for i in range(n_sentences)], dtype=float)
+    # Normalize scores to [0, 1]
+    if scores.max() > 0:
+        scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
+    else:
+        scores[:] = 1.0 / n_sentences
 
-      <div id="result"></div>
+    selected = []
+    candidate_idxs = set(indices.tolist())
 
-      <footer>
-        <p class="small">Server model: <strong>{{ model_name }}</strong>.</p>
-      </footer>
-    </div>
+    if summary_size >= n_sentences:
+        return list(indices)
 
-    <script>
-      const form = document.getElementById('upload-form');
-      const resultDiv = document.getElementById('result');
+    # Precompute to be safe
+    sim_matrix = sim_matrix.copy()
+    np.fill_diagonal(sim_matrix, 0.0)
 
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        resultDiv.innerHTML = "<div class='result small'>Working... this may take a few seconds for large documents.</div>";
-        const formData = new FormData(form);
-        try {
-          const resp = await fetch('/summarize', { method: 'POST', body: formData });
-          if (!resp.ok) {
-            const txt = await resp.text();
-            throw new Error(txt || resp.statusText);
-          }
-          const data = await resp.json();
-          let html = `<div class='result'><h3>Extractive Summary</h3>`;
-          html += `<p class='small'><strong>Selected ${data.selected_count} of ${data.total_sentences} sentences (ratio=${data.ratio})</strong></p>`;
-          html += `<div>`;
-          if (data.highlighted_html) {
-            html += `<div style="line-height:1.6">${data.highlighted_html}</div>`;
-          } else {
-            html += `<pre style="white-space:pre-wrap">${data.summary_text}</pre>`;
-          }
-          html += `</div>`;
-          if (data.download_url) {
-            html += `<p><a href="${data.download_url}" download="summary.txt">Download summary.txt</a></p>`;
-          }
-          html += `</div>`;
-          resultDiv.innerHTML = html;
-        } catch (err) {
-          resultDiv.innerHTML = `<div class="result small" style="color:maroon">Error: ${err.message}</div>`;
+    while len(selected) < summary_size and candidate_idxs:
+        mmr_scores = {}
+        for i in candidate_idxs:
+            if not selected:
+                diversity_penalty = 0.0
+            else:
+                sim_to_selected = max(sim_matrix[i][j] for j in selected)
+                diversity_penalty = sim_to_selected
+
+            mmr_score = lambda_param * scores[i] - (1 - lambda_param) * diversity_penalty
+            mmr_scores[i] = mmr_score
+
+        # Choose candidate with max MMR
+        best_idx = max(mmr_scores, key=mmr_scores.get)
+        selected.append(best_idx)
+        candidate_idxs.remove(best_idx)
+
+    return selected
+
+
+def summarize_document(text: str, length_choice: str = "medium"):
+    """
+    High-level pipeline:
+      1. Normalize and split into sentences
+      2. TF-IDF embeddings
+      3. Cosine similarity graph + TextRank
+      4. MMR for redundancy reduction
+      5. Reorder selected sentences to original order
+    """
+    cleaned = normalize_whitespace(text)
+    sentences = split_into_sentences(cleaned)
+
+    if not sentences:
+        raise ValueError("No valid sentences found in the document.")
+
+    n_sent = len(sentences)
+
+    # If very short document, just return as-is
+    if n_sent <= 3:
+        summary_text = " ".join(sentences)
+        stats = {
+            "original_sentences": n_sent,
+            "summary_sentences": n_sent,
+            "original_chars": len(cleaned),
+            "summary_chars": len(summary_text),
+            "compression_ratio": 100,
         }
-      });
-    </script>
-  </body>
-</html>
-"""
+        return summary_text, stats
+
+    # Determine summary length based on user choice
+    length_choice = (length_choice or "medium").lower()
+    if length_choice == "short":
+        ratio = 0.15
+        max_sents = 5
+    elif length_choice == "long":
+        ratio = 0.35
+        max_sents = 15
+    else:
+        ratio = 0.25
+        max_sents = 10
+
+    target_count = max(1, int(round(n_sent * ratio)))
+    target_count = min(target_count, max_sents, n_sent)
+
+    # TF-IDF embeddings
+    tfidf_matrix = build_tfidf_matrix(sentences)
+
+    # Cosine similarity matrix
+    sim_matrix = cosine_similarity(tfidf_matrix)
+
+    # TextRank sentence importance
+    textrank_scores = compute_textrank_scores(sim_matrix)
+
+    # MMR selection for redundancy reduction
+    selected_indices = mmr_selection(
+        scores_dict=textrank_scores,
+        sim_matrix=sim_matrix,
+        summary_size=target_count,
+        lambda_param=0.7,
+    )
+
+    # Reorder selected sentences according to original order
+    selected_indices_sorted = sorted(selected_indices)
+    summary_sentences = [sentences[i].strip() for i in selected_indices_sorted]
+    summary_text = " ".join(summary_sentences)
+
+    compression_ratio = int(round(100.0 * len(summary_sentences) / max(n_sent, 1)))
+
+    stats = {
+        "original_sentences": n_sent,
+        "summary_sentences": len(summary_sentences),
+        "original_chars": len(cleaned),
+        "summary_chars": len(summary_text),
+        "compression_ratio": compression_ratio,
+    }
+
+    return summary_text, stats
+
+
+# -------------------- Flask Routes -------------------- #
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template_string(INDEX_HTML, model_name=SBERT_MODEL_NAME)
+    return render_template_string(INDEX_HTML)
 
 
 @app.route("/summarize", methods=["POST"])
-def summarize_route():
-    # Parse ratio
-    try:
-        ratio = float(request.form.get("ratio", DEFAULT_SUMMARY_RATIO))
-        if ratio <= 0 or ratio > 1:
-            ratio = DEFAULT_SUMMARY_RATIO
-    except Exception:
-        ratio = DEFAULT_SUMMARY_RATIO
+def summarize():
+    if "file" not in request.files:
+        abort(400, description="No file part in the request.")
 
-    uploaded_file = request.files.get("file", None)
-    raw_text = (request.form.get("text") or "").strip()
+    uploaded_file = request.files["file"]
+    if uploaded_file.filename == "":
+        abort(400, description="No file selected.")
 
-    text = ""
-    if uploaded_file and uploaded_file.filename:
-        filename = uploaded_file.filename
-        if not allowed_file(filename):
-            return abort(400, "Only PDF and TXT files are supported.")
+    filename = uploaded_file.filename.lower()
+    if filename.endswith(".pdf"):
+        raw_text = extract_text_from_pdf(uploaded_file)
+    elif filename.endswith(".txt"):
         try:
-            content = uploaded_file.read()
-            ext = filename.rsplit(".", 1)[1].lower()
-            if ext == "pdf":
-                text = extract_text_from_pdf_bytes(content)
-            elif ext == "txt":
-                try:
-                    text = content.decode("utf-8", errors="replace")
-                except Exception:
-                    text = content.decode("latin1", errors="replace")
+            raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
         except Exception as e:
-            app.logger.error(f"Error reading uploaded file: {e}")
-            return abort(400, "Failed to read uploaded file.")
-    elif raw_text:
-        text = raw_text
+            raise RuntimeError(f"Error reading text file: {e}")
     else:
-        return abort(400, "No file or text provided. Please upload a PDF/TXT or paste text.")
+        abort(400, description="Unsupported file format. Please upload a PDF or .txt file.")
 
-    if not text.strip():
-        return abort(400, "No text could be extracted from the provided input.")
+    if not raw_text or len(raw_text.strip()) == 0:
+        abort(400, description="Uploaded file appears to be empty or unreadable.")
 
-    sentences = split_into_sentences(text)
-    if not sentences:
-        return abort(400, "Could not split the document into sentences. Try providing plain text or a digital PDF.")
+    length_choice = request.form.get("length", "medium")
 
-    summary_sentences, selected_indices = run_textrank_on_sentences(sentences, ratio=ratio)
-
-    selected_set = set(selected_indices)
-    highlighted_parts = []
-    for idx, sent in enumerate(sentences):
-        safe = html_module.escape(sent)
-        if idx in selected_set:
-            highlighted_parts.append(f"<mark>{safe}</mark>")
-        else:
-            highlighted_parts.append(safe)
-    highlighted_html = " ".join(highlighted_parts)
-
-    summary_text = "\n\n".join(summary_sentences)
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="summary_")
     try:
-        tmp.write(summary_text.encode("utf-8"))
-        tmp.flush()
-        tmp_path = tmp.name
-    finally:
-        tmp.close()
+        summary_text, stats = summarize_document(raw_text, length_choice=length_choice)
+    except Exception as e:
+        abort(500, description=f"Error during summarization: {e}")
 
-    fname = os.path.basename(tmp_path)
-    DOWNLOAD_REGISTRY[fname] = tmp_path
-    download_url = f"/download_summary/{fname}"
-
-    response = {
-        "summary_text": summary_text,
-        "highlighted_html": highlighted_html,
-        "selected_count": len(summary_sentences),
-        "total_sentences": len(sentences),
-        "ratio": ratio,
-        "download_url": download_url,
-    }
-    return jsonify(response)
+    return render_template_string(RESULT_HTML, summary=summary_text, stats=stats)
 
 
-@app.route("/download_summary/<fname>", methods=["GET"])
-def download_summary(fname: str):
-    path = DOWNLOAD_REGISTRY.get(fname)
-    if not path or not os.path.exists(path):
-        return abort(404, "File not found or expired.")
-    return send_file(path, as_attachment=True, download_name="summary.txt")
-
+# -------------------- Entry Point -------------------- #
 
 if __name__ == "__main__":
+    # For local testing; on Render, you will typically use: gunicorn app:app
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
