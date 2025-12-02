@@ -620,10 +620,22 @@ def normalize_whitespace(text: str) -> str:
     return text.strip()
 
 
+def strip_leading_numbering(sentence: str) -> str:
+    """
+    Remove leading section numbers like:
+    '3.3.1 ', '13.13 ', '2.4.1.3 ' etc.
+    """
+    sentence = re.sub(r"^\s*\d+(\.\d+)*\s*[:\-]?\s*", "", sentence)
+    return sentence
+
+
 def split_into_sentences(text: str):
     """
-    Lightweight rule-based sentence splitter.
-    Designed to avoid external model downloads (no NLTK data).
+    Rule-based sentence splitter with:
+    - splitting on . ! ?
+    - extra split on bullet markers ('o', '•')
+    - removing obvious section numbering
+    - light TOC-like filtering
     """
     text = re.sub(r"\n+", " ", text)
 
@@ -635,9 +647,35 @@ def split_into_sentences(text: str):
         s = s.strip()
         if len(s) < 2:
             continue
+
+        # First remove leading bullets like "•", "-", etc.
         s = re.sub(r"^[•\-\–\*]+\s*", "", s)
-        if s:
-            sentences.append(s)
+
+        # Now split further on bullet markers inside the sentence (e.g. " o In primary care ...")
+        bullet_parts = re.split(r"\s+[•o]\s+", s)
+        for part in bullet_parts:
+            part = part.strip()
+            if len(part) < 2:
+                continue
+
+            # Remove section numbers like "3.3.1 " at the start
+            part = strip_leading_numbering(part)
+            part = part.strip()
+
+            if not part:
+                continue
+
+            # Basic length check to avoid huge junk fragments
+            if len(part) < 20:
+                # very tiny fragments (e.g. single words) are skipped
+                continue
+
+            # Skip table-of-contents style lines
+            if is_toc_like(part):
+                continue
+
+            sentences.append(part)
+
     return sentences
 
 
@@ -683,7 +721,7 @@ def build_tfidf_matrix(sentences):
         stop_words="english",
         ngram_range=(1, 2),
         max_df=0.9,
-        min_df=1
+        min_df=1,
     )
     tfidf_matrix = vectorizer.fit_transform(sentences)
     return tfidf_matrix
@@ -743,17 +781,17 @@ def mmr_selection(scores_dict, sim_matrix, summary_size, lambda_param=0.7):
 def summarize_document(text: str, length_choice: str = "medium"):
     """
     High-level pipeline:
-      1. Normalize and split into sentences
+      1. Normalize and split into cleaned sentences
       2. TF-IDF embeddings
       3. Cosine similarity graph + TextRank
       4. MMR for redundancy reduction
       5. Reorder selected sentences to original order
     """
     cleaned = normalize_whitespace(text)
-    sentences_all = split_into_sentences(cleaned)
+    sentences = split_into_sentences(cleaned)
 
-    # Filter out TOC-like sentences (optional, helps with policy PDFs)
-    sentences = [s for s in sentences_all if not is_toc_like(s)]
+    # Extra TOC-like filter at this stage as a second safety net
+    sentences = [s for s in sentences if not is_toc_like(s)]
 
     if not sentences:
         raise ValueError("No valid sentences found in the document.")
@@ -787,7 +825,6 @@ def summarize_document(text: str, length_choice: str = "medium"):
     target_count = min(target_count, max_sents, n_sent)
 
     tfidf_matrix = build_tfidf_matrix(sentences)
-
     sim_matrix = cosine_similarity(tfidf_matrix)
 
     textrank_scores = compute_textrank_scores(sim_matrix)
