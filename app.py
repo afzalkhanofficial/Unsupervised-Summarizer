@@ -492,200 +492,10 @@ def detect_title(raw_text: str) -> str:
             continue
         if "content" in s.lower():
             break
-        # Do NOT strip year; just return the first meaningful line
         return s
     return "Policy Document"
 
-
-# ---------------------- CORE SUMMARIZATION (TF-IDF + TextRank + MMR) ---------------------- #
-
-def build_tfidf(sentences: List[str]):
-    vec = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2),
-        max_df=0.9,
-        min_df=1
-    )
-    mat = vec.fit_transform(sentences)
-    return mat
-
-def textrank_scores(sim_mat: np.ndarray, positional_boost: np.ndarray = None) -> Dict[int, float]:
-    np.fill_diagonal(sim_mat, 0.0)
-    G = nx.from_numpy_array(sim_mat)
-    pr = nx.pagerank(G, max_iter=200, tol=1e-6)
-    scores = np.array([pr.get(i, 0.0) for i in range(sim_mat.shape[0])], dtype=float)
-    if positional_boost is not None:
-        scores = scores * (1.0 + positional_boost)
-    return {i: float(scores[i]) for i in range(len(scores))}
-
-def mmr(scores_dict: Dict[int, float], sim_mat: np.ndarray, k: int, lambda_param: float = 0.7) -> List[int]:
-    n = sim_mat.shape[0]
-    indices = list(range(n))
-    scores = np.array([scores_dict.get(i, 0.0) for i in indices], dtype=float)
-    if scores.max() > 0:
-        scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
-    selected: List[int] = []
-    candidates = set(indices)
-
-    while len(selected) < k and candidates:
-        best = None
-        best_score = -1e9
-        for i in list(candidates):
-            if not selected:
-                div = 0.0
-            else:
-                div = max(sim_mat[i][j] for j in selected)
-            mmr_score = lambda_param * scores[i] - (1 - lambda_param) * div
-            if mmr_score > best_score:
-                best_score = mmr_score
-                best = i
-        if best is None:
-            break
-        selected.append(best)
-        candidates.remove(best)
-    return selected
-
-def summarize_extractive(raw_text: str, length_choice: str = "medium"):
-    cleaned = normalize_whitespace(raw_text)
-    sections = extract_sections(cleaned)
-
-    sentences: List[str] = []
-    sent_to_section: List[int] = []
-    for si, (title, body) in enumerate(sections):
-        sents = sentence_split(body)
-        for s in sents:
-            sentences.append(s)
-            sent_to_section.append(si)
-
-    if not sentences:
-        sentences = sentence_split(cleaned)
-        sent_to_section = [0] * len(sentences)
-        sections = [("Document", cleaned)]
-
-    n = len(sentences)
-    if n <= 3:
-        summary_sentences = sentences
-        summary_text = " ".join(summary_sentences)
-        stats = {
-            "original_sentences": n,
-            "summary_sentences": len(summary_sentences),
-            "original_chars": len(cleaned),
-            "summary_chars": len(summary_text),
-            "compression_ratio": 100,
-        }
-        return summary_sentences, stats
-
-    if length_choice == "short":
-        ratio, max_s = 0.10, 6
-    elif length_choice == "long":
-        ratio, max_s = 0.30, 20
-    else:
-        ratio, max_s = 0.20, 12
-
-    target = min(max(1, int(round(n * ratio))), max_s, n)
-
-    tfidf = build_tfidf(sentences)
-    sim = cosine_similarity(tfidf)
-
-    pos_boost = np.zeros(n, dtype=float)
-    sec_first_idx: Dict[int, int] = {}
-    for idx, sec_idx in enumerate(sent_to_section):
-        sec_first_idx.setdefault(sec_idx, None)
-        if sec_first_idx[sec_idx] is None:
-            sec_first_idx[sec_idx] = idx
-    num_sections = max(sent_to_section) + 1 if sent_to_section else 1
-    for sec_idx, first_idx in sec_first_idx.items():
-        if first_idx is not None:
-            if num_sections > 1:
-                weight = 0.06 * (1.0 - (sec_idx / (num_sections - 1)))
-            else:
-                weight = 0.06
-            pos_boost[first_idx] += weight
-
-    tr_scores = textrank_scores(sim, positional_boost=pos_boost)
-
-    # Section importance with extra boost for goals/principles sections
-    sec_scores = defaultdict(float)
-    for i, sec_idx in enumerate(sent_to_section):
-        row = tfidf[i]
-        sec_scores[sec_idx] += float(np.linalg.norm(row.toarray()))
-
-    for sec_idx, (title, _) in enumerate(sections):
-        t = title.lower()
-        boost = 1.0
-        if any(w in t for w in ["goal", "objective"]):
-            boost *= 1.5
-        if "principle" in t:
-            boost *= 1.2
-        sec_scores[sec_idx] *= boost
-
-    sorted_secs = sorted(sec_scores.items(), key=lambda x: -x[1])
-    num_secs = len(sorted_secs)
-    per_section_quota = [0] * num_secs
-
-    if target >= num_secs:
-        for i in range(min(target, num_secs)):
-            per_section_quota[i] = 1
-        remaining = target - sum(per_section_quota)
-        idx = 0
-        while remaining > 0 and num_secs > 0:
-            per_section_quota[idx % num_secs] += 1
-            idx += 1
-            remaining -= 1
-    else:
-        for i in range(target):
-            per_section_quota[i] = 1
-
-    selected_idxs: List[int] = []
-    sec_to_global = defaultdict(list)
-    sec_order = [s for s, _ in sorted_secs]
-    for g_idx, s_idx in enumerate(sent_to_section):
-        sec_to_global[s_idx].append(g_idx)
-
-    for rank_pos, sec_idx in enumerate(sec_order):
-        quota = per_section_quota[rank_pos] if rank_pos < len(per_section_quota) else 0
-        if quota <= 0:
-            continue
-        candidates = sec_to_global.get(sec_idx, [])
-        if not candidates:
-            continue
-        local_index_map = {g: i for i, g in enumerate(candidates)}
-        local_sim = sim[np.ix_(candidates, candidates)]
-        local_scores = {i: tr_scores[g] for g, i in local_index_map.items()}
-        local_picks = mmr(local_scores, local_sim, min(quota, len(candidates)), lambda_param=0.75)
-        for lp in local_picks:
-            selected_idxs.append(candidates[lp])
-
-    if len(selected_idxs) < target:
-        remaining = target - len(selected_idxs)
-        already = set(selected_idxs)
-        ranked_global = sorted(range(n), key=lambda i: -tr_scores.get(i, 0.0))
-        cand = [i for i in ranked_global if i not in already]
-        local_scores = {idx: tr_scores.get(idx, 0.0) for idx in cand}
-        local_sim = sim[np.ix_(cand, cand)]
-        global_picks = mmr(local_scores, local_sim, min(remaining, len(cand)), lambda_param=0.7)
-        for p in global_picks:
-            selected_idxs.append(cand[p])
-
-    selected_idxs = sorted(set(selected_idxs))
-    summary_sentences = [sentences[i].strip() for i in selected_idxs][:target]
-    summary_text = " ".join(summary_sentences)
-    stats = {
-        "original_sentences": n,
-        "summary_sentences": len(summary_sentences),
-        "original_chars": len(cleaned),
-        "summary_chars": len(summary_text),
-        "compression_ratio": int(round(100.0 * len(summary_sentences) / max(1, n))),
-    }
-    return summary_sentences, stats
-
-
-# ---------------------- STRUCTURED SUMMARY BUILDING ---------------------- #
-
-def simplify_for_easy_english(s: str) -> str:
-    s = re.sub(r"\([^)]{1,30}\)", "", s)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+# ---------------------- CATEGORIZATION ---------------------- #
 
 def categorize_sentence(s: str) -> str:
     s_lower = s.lower()
@@ -759,6 +569,219 @@ def categorize_sentence(s: str) -> str:
 
     return "other"
 
+# ---------------------- TF-IDF + TEXTRANK + MMR ---------------------- #
+
+def build_tfidf(sentences: List[str]):
+    vec = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        max_df=0.9,
+        min_df=1
+    )
+    mat = vec.fit_transform(sentences)
+    return mat
+
+def textrank_scores(sim_mat: np.ndarray, positional_boost: np.ndarray = None) -> Dict[int, float]:
+    np.fill_diagonal(sim_mat, 0.0)
+    G = nx.from_numpy_array(sim_mat)
+    pr = nx.pagerank(G, max_iter=200, tol=1e-6)
+    scores = np.array([pr.get(i, 0.0) for i in range(sim_mat.shape[0])], dtype=float)
+    if positional_boost is not None:
+        scores = scores * (1.0 + positional_boost)
+    return {i: float(scores[i]) for i in range(len(scores))}
+
+def mmr(scores_dict: Dict[int, float], sim_mat: np.ndarray, k: int, lambda_param: float = 0.7) -> List[int]:
+    n = sim_mat.shape[0]
+    indices = list(range(n))
+    scores = np.array([scores_dict.get(i, 0.0) for i in indices], dtype=float)
+    if scores.max() > 0:
+        scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
+    selected: List[int] = []
+    candidates = set(indices)
+
+    while len(selected) < k and candidates:
+        best = None
+        best_score = -1e9
+        for i in list(candidates):
+            if not selected:
+                div = 0.0
+            else:
+                div = max(sim_mat[i][j] for j in selected)
+            mmr_score = lambda_param * scores[i] - (1 - lambda_param) * div
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best = i
+        if best is None:
+            break
+        selected.append(best)
+        candidates.remove(best)
+    return selected
+
+# ---------------------- EXTRACTIVE SUMMARIZER ---------------------- #
+
+def summarize_extractive(raw_text: str, length_choice: str = "medium"):
+    cleaned = normalize_whitespace(raw_text)
+    sections = extract_sections(cleaned)
+
+    sentences: List[str] = []
+    sent_to_section: List[int] = []
+    for si, (title, body) in enumerate(sections):
+        sents = sentence_split(body)
+        for s in sents:
+            sentences.append(s)
+            sent_to_section.append(si)
+
+    if not sentences:
+        sentences = sentence_split(cleaned)
+        sent_to_section = [0] * len(sentences)
+        sections = [("Document", cleaned)]
+
+    n = len(sentences)
+    if n <= 3:
+        summary_sentences = sentences
+        summary_text = " ".join(summary_sentences)
+        stats = {
+            "original_sentences": n,
+            "summary_sentences": len(summary_sentences),
+            "original_chars": len(cleaned),
+            "summary_chars": len(summary_text),
+            "compression_ratio": 100,
+        }
+        return summary_sentences, stats
+
+    if length_choice == "short":
+        ratio, max_s = 0.10, 6
+    elif length_choice == "long":
+        ratio, max_s = 0.30, 20
+    else:
+        ratio, max_s = 0.20, 12
+
+    target = min(max(1, int(round(n * ratio))), max_s, n)
+
+    tfidf = build_tfidf(sentences)
+    sim = cosine_similarity(tfidf)
+
+    pos_boost = np.zeros(n, dtype=float)
+    sec_first_idx: Dict[int, int] = {}
+    for idx, sec_idx in enumerate(sent_to_section):
+        sec_first_idx.setdefault(sec_idx, None)
+        if sec_first_idx[sec_idx] is None:
+            sec_first_idx[sec_idx] = idx
+    num_sections = max(sent_to_section) + 1 if sent_to_section else 1
+    for sec_idx, first_idx in sec_first_idx.items():
+        if first_idx is not None:
+            if num_sections > 1:
+                weight = 0.06 * (1.0 - (sec_idx / (num_sections - 1)))
+            else:
+                weight = 0.06
+            pos_boost[first_idx] += weight
+
+    tr_scores = textrank_scores(sim, positional_boost=pos_boost)
+
+    # -------- section scoring with boost for goals/principles sections --------
+    sec_scores = defaultdict(float)
+    for i, sec_idx in enumerate(sent_to_section):
+        row = tfidf[i]
+        sec_scores[sec_idx] += float(np.linalg.norm(row.toarray()))
+
+    for sec_idx, (title, _) in enumerate(sections):
+        t = title.lower()
+        boost = 1.0
+        if any(w in t for w in ["goal", "objective"]):
+            boost *= 1.5
+        if "principle" in t:
+            boost *= 1.2
+        sec_scores[sec_idx] *= boost
+
+    sorted_secs = sorted(sec_scores.items(), key=lambda x: -x[1])
+    num_secs = len(sorted_secs)
+    per_section_quota = [0] * num_secs
+
+    if target >= num_secs:
+        for i in range(min(target, num_secs)):
+            per_section_quota[i] = 1
+        remaining = target - sum(per_section_quota)
+        idx = 0
+        while remaining > 0 and num_secs > 0:
+            per_section_quota[idx % num_secs] += 1
+            idx += 1
+            remaining -= 1
+    else:
+        for i in range(target):
+            per_section_quota[i] = 1
+
+    selected_idxs: List[int] = []
+    sec_to_global = defaultdict(list)
+    sec_order = [s for s, _ in sorted_secs]
+    for g_idx, s_idx in enumerate(sent_to_section):
+        sec_to_global[s_idx].append(g_idx)
+
+    for rank_pos, sec_idx in enumerate(sec_order):
+        quota = per_section_quota[rank_pos] if rank_pos < len(per_section_quota) else 0
+        if quota <= 0:
+            continue
+        candidates = sec_to_global.get(sec_idx, [])
+        if not candidates:
+            continue
+        local_index_map = {g: i for i, g in enumerate(candidates)}
+        local_sim = sim[np.ix_(candidates, candidates)]
+        local_scores = {i: tr_scores[g] for g, i in local_index_map.items()}
+        local_picks = mmr(local_scores, local_sim, min(quota, len(candidates)), lambda_param=0.75)
+        for lp in local_picks:
+            selected_idxs.append(candidates[lp])
+
+    if len(selected_idxs) < target:
+        remaining = target - len(selected_idxs)
+        already = set(selected_idxs)
+        ranked_global = sorted(range(n), key=lambda i: -tr_scores.get(i, 0.0))
+        cand = [i for i in ranked_global if i not in already]
+        local_scores = {idx: tr_scores.get(idx, 0.0) for idx in cand}
+        local_sim = sim[np.ix_(cand, cand)]
+        global_picks = mmr(local_scores, local_sim, min(remaining, len(cand)), lambda_param=0.7)
+        for p in global_picks:
+            selected_idxs.append(cand[p])
+
+    # -------- FORCE-INCLUDE KEY GOAL SENTENCES --------
+    goal_indices = [i for i, s in enumerate(sentences) if categorize_sentence(s) == "key goals"]
+    goal_indices_sorted = sorted(goal_indices, key=lambda i: -tr_scores.get(i, 0.0))
+    if goal_indices_sorted:
+        # choose up to 3 goal sentences, or 25% of target, whichever smaller but at least 1
+        desired_goal = min(len(goal_indices_sorted),
+                           max(1, min(3, int(0.25 * target))))
+        forced_goal = goal_indices_sorted[:desired_goal]
+    else:
+        forced_goal = []
+
+    combined = set(selected_idxs) | set(forced_goal)
+    if len(combined) > target:
+        # keep all goal sentences; drop lowest-scoring non-goal sentences
+        goal_set = set(forced_goal)
+        non_goal = [i for i in combined if i not in goal_set]
+        non_goal_sorted = sorted(non_goal, key=lambda i: tr_scores.get(i, 0.0), reverse=True)
+        keep_non_goal = non_goal_sorted[: max(0, target - len(goal_set))]
+        combined = goal_set | set(keep_non_goal)
+
+    selected_idxs = sorted(combined)
+
+    # ------------------------------------------------------------------ #
+    summary_sentences = [sentences[i].strip() for i in selected_idxs][:target]
+    summary_text = " ".join(summary_sentences)
+    stats = {
+        "original_sentences": n,
+        "summary_sentences": len(summary_sentences),
+        "original_chars": len(cleaned),
+        "summary_chars": len(summary_text),
+        "compression_ratio": int(round(100.0 * len(summary_sentences) / max(1, n))),
+    }
+    return summary_sentences, stats
+
+# ---------------------- STRUCTURED SUMMARY ---------------------- #
+
+def simplify_for_easy_english(s: str) -> str:
+    s = re.sub(r"\([^)]{1,30}\)", "", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
 def build_structured_summary(summary_sentences: List[str], tone: str):
     if tone == "easy":
         processed = [simplify_for_easy_english(s) for s in summary_sentences]
@@ -807,7 +830,6 @@ def build_structured_summary(summary_sentences: List[str], tone: str):
         "category_counts": category_counts,
         "implementation_points": implementation_points,
     }
-
 
 # ---------------------- FLASK ROUTES ---------------------- #
 
