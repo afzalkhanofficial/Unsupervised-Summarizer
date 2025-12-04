@@ -32,6 +32,9 @@ import google.generativeai as genai
 
 # ---------------------- CONFIG ---------------------- #
 
+# If you are on Windows, you might need to point to tesseract cmd specifically:
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,7 +52,6 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
     except Exception:
-        # Fail gracefully if config fails
         GEMINI_API_KEY = None
 
 
@@ -63,9 +65,7 @@ INDEX_HTML = """
   <title>Med | Policy Brief Summarizer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script>
     tailwind.config = {
       theme: {
@@ -75,224 +75,286 @@ INDEX_HTML = """
             mono: ['JetBrains Mono', 'monospace'],
           },
           colors: {
-            teal: {
+            brand: {
               50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4',
               400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e',
               800: '#115e59', 900: '#134e4a'
             },
+          },
+          animation: {
+            'progress': 'progress 2s ease-in-out infinite',
+          },
+          keyframes: {
+            progress: {
+              '0%': { width: '0%' },
+              '50%': { width: '70%' },
+              '100%': { width: '100%' },
+            }
           }
         }
       }
     }
   </script>
   <style>
-    .card-glass {
-      @apply bg-white/90 backdrop-blur-xl border border-slate-200/80 shadow-xl rounded-3xl;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap');
+    
+    .glass-panel {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(226, 232, 240, 0.8);
+      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
     }
-    .chip {
-      @apply inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold;
+    
+    /* Loading Overlay Styles */
+    #loading-overlay {
+      display: none; /* Hidden by default */
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(5px);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
     }
-    .chip-badge {
-      @apply w-2 h-2 rounded-full;
+    
+    .loader {
+      width: 48px;
+      height: 48px;
+      border: 5px solid #0d9488;
+      border-bottom-color: transparent;
+      border-radius: 50%;
+      display: inline-block;
+      box-sizing: border-box;
+      animation: rotation 1s linear infinite;
+    }
+
+    @keyframes rotation {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
     }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-800 relative overflow-x-hidden">
+<body class="bg-slate-50 text-slate-800 relative selection:bg-brand-200 selection:text-brand-900">
 
-  <!-- Background blobs (keep your nice aesthetic) -->
-  <div class="blob blob-1 animate-float-slow"></div>
-  <div class="blob blob-2 animate-float-medium"></div>
+  <div id="loading-overlay">
+    <div class="loader mb-6"></div>
+    <h2 class="text-2xl font-bold text-slate-800 animate-pulse">Analyzing Policy Document...</h2>
+    <p class="text-slate-500 mt-2 text-sm">Running TF-IDF & TextRank algorithms</p>
+    
+    <div class="w-64 h-2 bg-slate-200 rounded-full mt-6 overflow-hidden">
+      <div class="h-full bg-brand-600 rounded-full animate-[progress_3s_ease-in-out_infinite]"></div>
+    </div>
+  </div>
 
-  <!-- NAVBAR -->
-  <nav class="fixed w-full z-50 bg-white/80 backdrop-blur-lg border-b border-slate-200/60">
+  <nav class="fixed w-full z-40 bg-white/80 backdrop-blur-md border-b border-slate-200">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex justify-between h-16 items-center">
         <div class="flex items-center gap-3">
-          <div class="w-9 h-9 bg-gradient-to-tr from-teal-600 to-cyan-600 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/30">
-            <i class="fa-solid fa-staff-snake text-white text-lg"></i>
+          <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-brand-500/30">
+            <i class="fa-solid fa-staff-snake"></i>
           </div>
-          <span class="font-extrabold text-xl tracking-tight text-slate-900">
-            Med<span class="text-teal-600">.AI</span>
-          </span>
+          <span class="font-bold text-xl tracking-tight text-slate-900">Med.AI</span>
         </div>
-        <div class="hidden md:flex items-center gap-8 text-sm font-semibold">
-          <span class="text-slate-500">Unsupervised · TF-IDF · TextRank · MMR</span>
-          <a href="#workspace" class="px-4 py-2 rounded-full bg-teal-600 text-white hover:bg-teal-700 shadow-md shadow-teal-500/30 text-xs uppercase tracking-wide">
-            Open Workspace
-          </a>
+        <div class="hidden md:flex gap-6 text-sm font-medium text-slate-500">
+          <span class="hover:text-brand-600 cursor-default">Extractive Summarization</span>
+          <span class="hover:text-brand-600 cursor-default">Policy Analysis</span>
         </div>
       </div>
     </div>
   </nav>
 
-  <!-- HERO + WORKSPACE -->
   <main class="pt-28 pb-20 px-4">
-    <div class="max-w-7xl mx-auto grid lg:grid-cols-12 gap-10 items-start">
-      <!-- Left: hero text -->
-      <section class="lg:col-span-5 space-y-6 fade-up">
-        <div class="chip bg-teal-50 text-teal-700 border border-teal-200">
-          <span class="chip-badge bg-teal-500 animate-pulse"></span>
-          Primary Healthcare Policy · Extractive NLP
+    <div class="max-w-6xl mx-auto">
+      
+      <div class="text-center mb-12 space-y-4">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-50 text-brand-700 border border-brand-200 text-xs font-bold uppercase tracking-wide">
+          <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+          AI Powered Policy Briefs
         </div>
-        <h1 class="text-4xl lg:text-5xl font-extrabold text-slate-900 leading-tight">
-          Summarize policy briefs<br>
-          <span class="text-gradient-teal">for Primary Healthcare</span>
+        <h1 class="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight">
+          Transform Healthcare Policy<br>
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-teal-400">into Actionable Insights</span>
         </h1>
-        <p class="text-slate-600 text-base lg:text-lg font-medium leading-relaxed">
-          Upload PDF, text, or capture a photo of a document. Our unsupervised
-          engine (TF-IDF + TextRank + MMR) produces an abstract and structured
-          bullet summary optimized for policy and primary healthcare use-cases.
+        <p class="max-w-2xl mx-auto text-slate-600 text-lg">
+          Upload PDFs, text files, or capture document images. Our intelligent engine extracts abstract summaries, goals, and financing structures instantly.
         </p>
+      </div>
 
-        <div class="space-y-3 text-sm text-slate-600">
-          <p class="font-semibold text-slate-700 flex items-center gap-2">
-            <i class="fa-solid fa-circle-check text-teal-500"></i>
-            Designed for policy briefs, guidelines, health missions.
-          </p>
-          <p class="font-semibold text-slate-700 flex items-center gap-2">
-            <i class="fa-solid fa-circle-check text-teal-500"></i>
-            Document preview · Gemini Q&A · PDF export of summary.
-          </p>
-        </div>
-      </section>
-
-      <!-- Right: upload workspace -->
-      <section id="workspace" class="lg:col-span-7">
-        <div class="card-glass p-6 lg:p-8 fade-up delay-100">
-          <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
-            <div>
-              <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
-                <i class="fa-solid fa-cloud-arrow-up text-teal-600"></i>
-                Upload Policy Document
-              </h2>
-              <p class="text-xs text-slate-500 mt-1">
-                Supported: PDF · TXT · Image (camera capture). Max size depends on server limits.
-              </p>
-            </div>
-            <div class="flex flex-wrap gap-2 text-[0.65rem] font-semibold">
-              <span class="chip bg-slate-100 text-slate-700">
-                <span class="chip-badge bg-emerald-500"></span>
-                Extractive · Unsupervised
-              </span>
-              <span class="chip bg-slate-100 text-slate-700">
-                <span class="chip-badge bg-indigo-500"></span>
-                Gemini Chat
-              </span>
-              <span class="chip bg-slate-100 text-slate-700">
-                <span class="chip-badge bg-amber-500"></span>
-                Summary PDF Export
-              </span>
-            </div>
-          </div>
-
-          <form action="{{ url_for('summarize') }}" method="post" enctype="multipart/form-data" class="space-y-6">
-            <!-- File / camera input -->
-            <div class="border-2 border-dashed border-slate-200 rounded-2xl p-5 bg-slate-50/60 hover:border-teal-300 hover:bg-teal-50/40 transition relative">
-              <div class="flex flex-col md:flex-row items-center gap-4">
-                <div class="flex-1 text-sm text-slate-600">
-                  <p class="font-semibold text-slate-800 mb-1">
-                    Drop your file here, or browse from device
-                  </p>
-                  <p class="text-xs">
-                    Accepts <span class="font-semibold">.pdf, .txt, .jpg, .jpeg, .png</span>.
-                    On mobile, you can use the camera directly.
-                  </p>
-                </div>
-                <div class="flex flex-col sm:flex-row gap-3">
-                  <label class="inline-flex items-center justify-center px-4 py-2 rounded-full bg-white text-slate-700 border border-slate-200 text-xs font-semibold cursor-pointer hover:border-teal-300 hover:text-teal-700">
-                    <i class="fa-solid fa-folder-open mr-2 text-teal-500"></i>
-                    Browse Files
-                    <input id="file" type="file" name="file"
-                           accept=".pdf,.txt,image/*"
-                           capture="environment"
-                           class="hidden" required>
-                  </label>
-                  <label class="inline-flex items-center justify-center px-4 py-2 rounded-full bg-teal-600 text-white text-xs font-semibold cursor-pointer shadow-md shadow-teal-500/30 hover:bg-teal-700">
-                    <i class="fa-solid fa-camera mr-2"></i>
-                    Use Camera
-                    <input type="file" accept="image/*" capture="environment"
-                           name="file_camera" class="hidden">
-                  </label>
-                </div>
+      <div class="glass-panel rounded-3xl p-1 shadow-2xl">
+        <div class="bg-white rounded-[1.3rem] border border-slate-100 p-6 md:p-10">
+          
+          <form id="upload-form" action="{{ url_for('summarize') }}" method="post" enctype="multipart/form-data" class="grid lg:grid-cols-2 gap-10">
+            
+            <div class="space-y-6">
+              <div>
+                <h3 class="text-lg font-bold text-slate-900 mb-1">Document Input</h3>
+                <p class="text-sm text-slate-500">Supported: PDF, TXT, Images (OCR)</p>
               </div>
-              <p class="mt-3 text-[0.7rem] text-slate-500">
-                If both file and camera are provided, the uploaded file takes priority.
-              </p>
-            </div>
 
-            <!-- Options row -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div class="space-y-2">
-                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Summary length</p>
-                <div class="space-y-1">
-                  <label class="flex items-center gap-2 text-xs">
-                    <input type="radio" name="length" value="short">
-                    <span>Short (high compression)</span>
-                  </label>
-                  <label class="flex items-center gap-2 text-xs">
-                    <input type="radio" name="length" value="medium" checked>
-                    <span>Medium (balanced)</span>
-                  </label>
-                  <label class="flex items-center gap-2 text-xs">
-                    <input type="radio" name="length" value="long">
-                    <span>Long (more detail)</span>
-                  </label>
+              <div class="group relative border-2 border-dashed border-slate-300 hover:border-brand-400 rounded-2xl bg-slate-50 hover:bg-brand-50/30 transition-all duration-300 p-8 text-center cursor-pointer">
+                
+                <div id="upload-placeholder" class="space-y-4 pointer-events-none">
+                  <div class="w-16 h-16 bg-white rounded-full shadow-sm border border-slate-200 flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-cloud-arrow-up text-2xl text-brand-500"></i>
+                  </div>
+                  <div>
+                    <p class="text-sm font-semibold text-slate-900">Click to browse or drop file</p>
+                    <p class="text-xs text-slate-500 mt-1">PDF, TXT, JPG, PNG</p>
+                  </div>
+                </div>
+
+                <div id="file-success" class="hidden space-y-3 pointer-events-none">
+                   <div class="w-16 h-16 bg-emerald-50 rounded-full border border-emerald-200 flex items-center justify-center mx-auto">
+                    <i class="fa-solid fa-check text-2xl text-emerald-500"></i>
+                  </div>
+                  <div>
+                    <p class="text-sm font-bold text-slate-900" id="filename-display">filename.pdf</p>
+                    <p class="text-xs text-emerald-600 font-medium">Ready for analysis</p>
+                  </div>
+                </div>
+
+                <input id="file-upload" type="file" name="file" accept=".pdf,.txt,image/*" 
+                       class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+              </div>
+
+              <div class="relative">
+                <div class="absolute inset-0 flex items-center">
+                  <div class="w-full border-t border-slate-200"></div>
+                </div>
+                <div class="relative flex justify-center text-xs uppercase">
+                  <span class="bg-white px-2 text-slate-500">Or use camera</span>
                 </div>
               </div>
 
-              <div class="space-y-2">
-                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Tone</p>
-                <div class="space-y-1">
-                  <label class="flex items-center gap-2 text-xs">
-                    <input type="radio" name="tone" value="academic" checked>
-                    <span>Academic</span>
-                  </label>
-                  <label class="flex items-center gap-2 text-xs">
-                    <input type="radio" name="tone" value="easy">
-                    <span>Easy English</span>
-                  </label>
+              <label class="flex items-center justify-center w-full py-3 px-4 rounded-xl border border-slate-200 shadow-sm bg-white text-slate-700 font-semibold cursor-pointer hover:bg-slate-50 hover:border-brand-300 transition gap-2">
+                <i class="fa-solid fa-camera text-brand-600"></i>
+                <span>Capture Document</span>
+                <input id="camera-upload" type="file" name="file_camera" accept="image/*" capture="environment" class="hidden">
+              </label>
+
+            </div>
+
+            <div class="flex flex-col justify-between space-y-8 border-l border-slate-100 lg:pl-10">
+              
+              <div class="space-y-6">
+                <div>
+                  <h3 class="text-lg font-bold text-slate-900 mb-1">Configuration</h3>
+                  <p class="text-sm text-slate-500">Tailor the summary output</p>
+                </div>
+
+                <div class="space-y-4">
+                  <div>
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Summary Length</span>
+                    <div class="grid grid-cols-3 gap-2 mt-2">
+                      <label class="cursor-pointer">
+                        <input type="radio" name="length" value="short" class="peer hidden">
+                        <div class="py-2 text-center text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 peer-checked:bg-slate-800 peer-checked:text-white peer-checked:border-slate-800 transition">
+                          Short
+                        </div>
+                      </label>
+                      <label class="cursor-pointer">
+                        <input type="radio" name="length" value="medium" checked class="peer hidden">
+                        <div class="py-2 text-center text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 peer-checked:bg-slate-800 peer-checked:text-white peer-checked:border-slate-800 transition">
+                          Medium
+                        </div>
+                      </label>
+                      <label class="cursor-pointer">
+                        <input type="radio" name="length" value="long" class="peer hidden">
+                        <div class="py-2 text-center text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 peer-checked:bg-slate-800 peer-checked:text-white peer-checked:border-slate-800 transition">
+                          Detailed
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Tone Style</span>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                      <label class="cursor-pointer">
+                        <input type="radio" name="tone" value="academic" checked class="peer hidden">
+                        <div class="flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 peer-checked:bg-brand-50 peer-checked:text-brand-700 peer-checked:border-brand-500 transition">
+                          <i class="fa-solid fa-graduation-cap"></i> Academic
+                        </div>
+                      </label>
+                      <label class="cursor-pointer">
+                        <input type="radio" name="tone" value="easy" class="peer hidden">
+                        <div class="flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 peer-checked:bg-brand-50 peer-checked:text-brand-700 peer-checked:border-brand-500 transition">
+                          <i class="fa-solid fa-child-reaching"></i> Simple English
+                        </div>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div class="space-y-2">
-                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  You will get
-                </p>
-                <ul class="text-xs text-slate-600 space-y-1">
-                  <li class="flex items-center gap-2">
-                    <i class="fa-solid fa-file-lines text-teal-500"></i>
-                    Abstract + bullet summary
-                  </li>
-                  <li class="flex items-center gap-2">
-                    <i class="fa-solid fa-eye text-amber-500"></i>
-                    Original document preview
-                  </li>
-                  <li class="flex items-center gap-2">
-                    <i class="fa-solid fa-message text-violet-500"></i>
-                    Gemini Q&A on this document
-                  </li>
-                  <li class="flex items-center gap-2">
-                    <i class="fa-solid fa-file-export text-emerald-500"></i>
-                    Downloadable summary PDF
-                  </li>
-                </ul>
-              </div>
-            </div>
-
-            <div class="flex justify-end">
-              <button type="submit"
-                class="inline-flex items-center px-6 py-2.5 rounded-full bg-teal-600 text-white text-sm font-bold shadow-md shadow-teal-500/40 hover:bg-teal-700 hover:shadow-lg hover:-translate-y-0.5 transition">
-                <i class="fa-solid fa-wand-magic-sparkles mr-2"></i>
-                Generate Summary
+              <button type="submit" 
+                class="group w-full py-4 rounded-xl bg-gradient-to-r from-brand-600 to-teal-500 text-white font-bold shadow-lg shadow-brand-500/30 hover:shadow-brand-500/50 hover:scale-[1.02] transition-all duration-200 flex items-center justify-center gap-2">
+                <span>Generate Summary</span>
+                <i class="fa-solid fa-wand-magic-sparkles group-hover:rotate-12 transition-transform"></i>
               </button>
+
             </div>
           </form>
+
         </div>
-      </section>
+      </div>
+      
+      <p class="text-center text-xs text-slate-400 mt-8">
+        Privacy Note: Documents are processed securely and temporarily. No data is used for model training.
+      </p>
+
     </div>
   </main>
 
-  <script src="{{ url_for('static', filename='script.js') }}"></script>
+  <script>
+    // Elements
+    const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('file-upload');
+    const cameraInput = document.getElementById('camera-upload');
+    const placeholderDiv = document.getElementById('upload-placeholder');
+    const successDiv = document.getElementById('file-success');
+    const filenameDisplay = document.getElementById('filename-display');
+    const loadingOverlay = document.getElementById('loading-overlay');
+
+    // Helper to update UI
+    function updateFileDisplay(name) {
+      if (!name) return;
+      placeholderDiv.classList.add('hidden');
+      successDiv.classList.remove('hidden');
+      filenameDisplay.textContent = name;
+    }
+
+    // Listeners for file selection
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        updateFileDisplay(e.target.files[0].name);
+        // Clear camera input if file input is used
+        cameraInput.value = '';
+      }
+    });
+
+    cameraInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        // For camera captures, names can be generic like "image.jpg"
+        updateFileDisplay("Captured Image");
+        // Clear file input if camera is used
+        fileInput.value = '';
+      }
+    });
+
+    // Form Submit Handler -> Show Loading
+    form.addEventListener('submit', (e) => {
+      // Basic validation
+      if (!fileInput.value && !cameraInput.value) {
+        e.preventDefault();
+        alert("Please select a file or take a photo first.");
+        return;
+      }
+      // Show loading overlay
+      loadingOverlay.style.display = 'flex';
+    });
+  </script>
 </body>
 </html>
 """
@@ -305,9 +367,7 @@ RESULT_HTML = """
   <title>{{ title }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script>
     tailwind.config = {
       theme: {
@@ -317,7 +377,7 @@ RESULT_HTML = """
             mono: ['JetBrains Mono', 'monospace'],
           },
           colors: {
-            teal: {
+            brand: {
               50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4',
               400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e',
               800: '#115e59', 900: '#134e4a'
@@ -330,21 +390,19 @@ RESULT_HTML = """
 </head>
 <body class="bg-slate-50 text-slate-800">
 
-  <nav class="fixed w-full z-40 bg-white/80 backdrop-blur-lg border-b border-slate-200/60">
+  <nav class="fixed w-full z-40 bg-white/80 backdrop-blur-lg border-b border-slate-200">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex justify-between h-16 items-center">
         <div class="flex items-center gap-3">
-          <div class="w-9 h-9 bg-gradient-to-tr from-teal-600 to-cyan-600 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/30">
-            <i class="fa-solid fa-staff-snake text-white text-lg"></i>
+          <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center text-white">
+            <i class="fa-solid fa-staff-snake"></i>
           </div>
-          <span class="font-extrabold text-xl tracking-tight text-slate-900">
-            Med<span class="text-teal-600">.AI</span>
-          </span>
+          <span class="font-bold text-xl tracking-tight text-slate-900">Med.AI</span>
         </div>
         <a href="{{ url_for('index') }}"
-           class="hidden md:inline-flex items-center px-4 py-2 text-xs font-semibold rounded-full border border-slate-200 hover:border-teal-300 hover:text-teal-700 bg-white">
+           class="inline-flex items-center px-4 py-2 text-xs font-bold rounded-lg border border-slate-200 hover:border-brand-300 hover:text-brand-700 bg-white transition shadow-sm">
           <i class="fa-solid fa-arrow-left mr-2"></i>
-          New document
+          Summarize Another
         </a>
       </div>
     </div>
@@ -352,52 +410,39 @@ RESULT_HTML = """
 
   <main class="pt-24 pb-12 px-4">
     <div class="max-w-7xl mx-auto grid lg:grid-cols-12 gap-8">
-      <!-- LEFT: summary & analytics -->
+      
       <section class="lg:col-span-7 space-y-6">
-        <div class="bg-white rounded-3xl shadow-xl border border-slate-200/80 p-6 md:p-8">
-          <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
-            <div>
-              <h1 class="text-xl md:text-2xl font-extrabold text-slate-900">{{ title }}</h1>
-              <p class="text-xs text-slate-500 mt-1">
-                Automatic extractive summary (TF-IDF + TextRank + MMR) with policy-aware heuristics.
-              </p>
-            </div>
-            <div class="text-xs text-slate-500 space-y-1">
-              <p><span class="font-semibold">Summary sentences:</span> {{ stats.summary_sentences }}</p>
-              <p><span class="font-semibold">Original sentences:</span> {{ stats.original_sentences }}</p>
-              <p><span class="font-semibold">Compression:</span> {{ stats.compression_ratio }}%</p>
+        
+        <div class="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+          <div class="p-6 md:p-8 border-b border-slate-100 bg-slate-50/50">
+            <h1 class="text-2xl font-extrabold text-slate-900 leading-tight">{{ title }}</h1>
+            <div class="flex gap-4 mt-3 text-xs font-semibold text-slate-500">
+               <span class="flex items-center gap-1"><i class="fa-solid fa-compress text-brand-500"></i> Reduced by {{ 100 - stats.compression_ratio }}%</span>
+               <span class="flex items-center gap-1"><i class="fa-solid fa-clock text-brand-500"></i> {{ stats.summary_sentences }} sentences</span>
             </div>
           </div>
 
-          <div class="border-t border-slate-200 pt-4 space-y-4">
+          <div class="p-6 md:p-8 space-y-8">
             <div>
-              <h2 class="text-base font-semibold text-slate-900 flex items-center gap-2">
-                <span class="w-6 h-6 rounded-full bg-teal-50 text-teal-700 flex items-center justify-center text-xs">
-                  A
-                </span>
-                Abstract
-              </h2>
-              <p class="mt-2 text-sm text-slate-700 leading-relaxed">{{ abstract }}</p>
+              <h2 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Abstract</h2>
+              <div class="bg-brand-50/50 p-4 rounded-xl border border-brand-100 text-slate-800 text-sm leading-relaxed">
+                {{ abstract }}
+              </div>
             </div>
 
             {% if sections %}
-            <div class="mt-4">
-              <h2 class="text-base font-semibold text-slate-900 flex items-center gap-2">
-                <span class="w-6 h-6 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center text-xs">
-                  Σ
-                </span>
-                Structured Summary
-              </h2>
-              <div class="mt-2 space-y-3">
+            <div>
+              <h2 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Key Findings</h2>
+              <div class="space-y-4">
                 {% for sec in sections %}
-                <div class="border border-slate-200 rounded-2xl p-3 bg-slate-50/80">
-                  <h3 class="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
-                    <span class="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
+                <div class="group">
+                  <h3 class="flex items-center gap-2 font-bold text-slate-900 text-sm mb-2">
+                    <span class="w-2 h-2 rounded-full bg-brand-500"></span>
                     {{ sec.title }}
                   </h3>
-                  <ul class="list-disc list-inside text-xs text-slate-700 space-y-1">
+                  <ul class="ml-2 pl-4 border-l-2 border-slate-100 space-y-2">
                     {% for bullet in sec.bullets %}
-                      <li>{{ bullet }}</li>
+                      <li class="text-xs text-slate-600 leading-relaxed">{{ bullet }}</li>
                     {% endfor %}
                   </ul>
                 </div>
@@ -408,144 +453,77 @@ RESULT_HTML = """
           </div>
 
           {% if summary_pdf_url %}
-          <div class="mt-5 flex flex-wrap gap-3 items-center border-t border-slate-200 pt-3">
-            <a href="{{ summary_pdf_url }}" class="inline-flex items-center px-4 py-2 rounded-full bg-teal-600 text-white text-xs font-semibold shadow-md shadow-teal-500/40 hover:bg-teal-700 hover:shadow-lg">
-              <i class="fa-solid fa-file-pdf mr-2"></i>
-              Download summary as PDF
+          <div class="bg-slate-50 p-4 border-t border-slate-100 flex justify-between items-center">
+            <span class="text-xs text-slate-500 font-medium">Get this summary to go</span>
+            <a href="{{ summary_pdf_url }}" class="inline-flex items-center px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition shadow-lg shadow-slate-900/20">
+              <i class="fa-solid fa-download mr-2"></i> Download PDF
             </a>
-            <p class="text-[0.7rem] text-slate-500">
-              The PDF contains this abstract and structured bullet summary, formatted for printing or submission.
-            </p>
           </div>
           {% endif %}
         </div>
 
-        <!-- Analytics: key data table + chart -->
-        <div class="bg-white rounded-3xl shadow-xl border border-slate-200/80 p-6 md:p-8 space-y-4">
-          <h2 class="text-base font-semibold text-slate-900 flex items-center gap-2">
-            <i class="fa-solid fa-chart-column text-teal-600"></i>
-            Summary Coverage by Category
+        <div class="bg-white rounded-3xl shadow-xl border border-slate-100 p-6 md:p-8">
+          <h2 class="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-chart-pie text-brand-500"></i> Topic Coverage
           </h2>
-
-          {% if category_counts %}
-          <div class="overflow-x-auto">
-            <table class="min-w-full text-xs text-left text-slate-600 border border-slate-200 rounded-xl overflow-hidden">
-              <thead class="bg-slate-50">
-                <tr>
-                  <th class="px-3 py-2 border-b border-slate-200 font-semibold">Category</th>
-                  <th class="px-3 py-2 border-b border-slate-200 font-semibold">Number of Summary Points</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for cat, count in category_counts.items() %}
-                <tr class="odd:bg-white even:bg-slate-50/80">
-                  <td class="px-3 py-2 capitalize">{{ cat }}</td>
-                  <td class="px-3 py-2">{{ count }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          {% else %}
-          <p class="text-xs text-slate-500">No category distribution available.</p>
-          {% endif %}
-
           {% if category_labels %}
-          <div class="mt-3">
-            <canvas id="catChart" height="140"></canvas>
-            <p class="mt-2 text-[0.7rem] text-slate-500">
-              Bars show how the extracted summary is distributed across conceptual categories
-              (goals, service delivery, financing, etc.).
-            </p>
-          </div>
-          {% endif %}
-
-          {% if implementation_points %}
-          <div class="mt-4 border-t border-slate-200 pt-3">
-            <h3 class="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
-              <i class="fa-solid fa-road text-amber-500"></i>
-              Implementation / Way Forward (Extractive)
-            </h3>
-            <ul class="list-disc list-inside text-xs text-slate-700 space-y-1">
-              {% for s in implementation_points %}
-              <li>{{ s }}</li>
-              {% endfor %}
-            </ul>
-          </div>
+            <canvas id="catChart" height="120"></canvas>
+          {% else %}
+            <p class="text-xs text-slate-400">Not enough data for analytics.</p>
           {% endif %}
         </div>
       </section>
 
-      <!-- RIGHT: original document + Gemini chat -->
       <section class="lg:col-span-5 space-y-6">
-        <!-- Original document viewer -->
-        <div class="bg-white rounded-3xl shadow-xl border border-slate-200/80 p-5 md:p-6">
-          <h2 class="text-base font-semibold text-slate-900 flex items-center gap-2 mb-3">
-            <i class="fa-solid fa-file-medical text-teal-600"></i>
-            Original Document
-          </h2>
-          {% if orig_type == 'pdf' %}
-            <div class="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50 h-[350px]">
-              <iframe src="{{ orig_url }}" class="w-full h-full" title="Original PDF"></iframe>
-            </div>
-          {% elif orig_type == 'text' %}
-            <div class="border border-slate-200 rounded-2xl bg-slate-50 p-3 h-[350px] overflow-y-auto">
-              <pre class="whitespace-pre-wrap text-xs text-slate-700">{{ orig_text }}</pre>
-            </div>
-          {% elif orig_type == 'image' %}
-            <div class="border border-slate-200 rounded-2xl bg-slate-50 p-2 flex items-center justify-center h-[350px] overflow-hidden">
-              <img src="{{ orig_url }}" alt="Uploaded document image" class="max-h-full max-w-full object-contain">
-            </div>
-          {% else %}
-            <p class="text-xs text-slate-500">Original document preview unavailable.</p>
-          {% endif %}
-          <p class="mt-2 text-[0.7rem] text-slate-500">
-            The summary above was generated purely from this document using unsupervised extractive methods.
-          </p>
+        
+        <div class="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden flex flex-col h-[500px]">
+          <div class="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+            <h2 class="text-sm font-bold text-slate-900">Original Document</h2>
+            <span class="text-[10px] uppercase font-bold text-slate-400">{{ orig_type }}</span>
+          </div>
+          <div class="flex-1 bg-slate-100 overflow-hidden relative">
+            {% if orig_type == 'pdf' %}
+              <iframe src="{{ orig_url }}" class="w-full h-full border-none"></iframe>
+            {% elif orig_type == 'text' %}
+              <div class="p-4 h-full overflow-y-auto text-xs font-mono text-slate-600 whitespace-pre-wrap">{{ orig_text }}</div>
+            {% elif orig_type == 'image' %}
+              <div class="flex items-center justify-center h-full p-4">
+                <img src="{{ orig_url }}" class="max-w-full max-h-full object-contain rounded-lg shadow-sm">
+              </div>
+            {% endif %}
+          </div>
         </div>
 
-        <!-- Gemini chat panel -->
-        <div class="bg-white rounded-3xl shadow-xl border border-slate-200/80 p-5 md:p-6">
-          <div class="flex items-center justify-between gap-3 mb-3">
-            <h2 class="text-base font-semibold text-slate-900 flex items-center gap-2">
-              <i class="fa-solid fa-message text-violet-500"></i>
-              Ask questions about this policy
+        <div class="bg-white rounded-3xl shadow-xl border border-slate-100 p-6 flex flex-col h-[400px]">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <i class="fa-solid fa-sparkles text-violet-500"></i> AI Assistant
             </h2>
-            <span class="text-[0.65rem] px-2 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200 font-semibold">
-              Gemini-connected
-            </span>
+            <span class="text-[10px] font-bold px-2 py-1 bg-violet-50 text-violet-600 rounded-md">Gemini Flash</span>
           </div>
-
-          <div id="chat-panel"
-               class="border border-slate-200 rounded-2xl bg-slate-50 p-3 h-64 overflow-y-auto text-xs space-y-2">
-            <div class="flex items-start gap-2">
-              <div class="w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center text-[0.7rem]">
+          
+          <div id="chat-panel" class="flex-1 overflow-y-auto space-y-3 pr-2 mb-4 scrollbar-hide">
+            <div class="flex gap-3">
+              <div class="w-8 h-8 rounded-full bg-violet-100 flex-shrink-0 flex items-center justify-center text-violet-600 text-xs">
                 <i class="fa-solid fa-robot"></i>
               </div>
-              <div class="bg-white rounded-2xl px-3 py-2 shadow-sm max-w-[80%]">
-                <p class="text-[0.7rem] text-slate-800">
-                  Ask me anything about this policy brief — goals, strategies, financing, or implications for primary healthcare.
-                </p>
+              <div class="bg-slate-50 border border-slate-100 rounded-2xl rounded-tl-none p-3 text-xs text-slate-600 shadow-sm">
+                Hello! I've read the document. Ask me about specific policies, numbers, or goals.
               </div>
             </div>
           </div>
 
-          <div class="mt-3 flex items-center gap-2">
-            <input id="chat-input"
-                   class="flex-1 text-xs rounded-full border border-slate-200 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
-                   type="text"
-                   placeholder="Example: What are the key quantitative goals by 2025?">
-            <button id="chat-send"
-                    class="px-4 py-2 rounded-full bg-teal-600 text-white text-xs font-semibold hover:bg-teal-700">
-              Ask
+          <div class="relative">
+            <input id="chat-input" type="text" placeholder="Ask a question..." 
+                   class="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pl-4 pr-12 text-xs focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
+            <button id="chat-send" class="absolute right-2 top-2 p-1.5 bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition">
+              <i class="fa-solid fa-paper-plane text-xs"></i>
             </button>
           </div>
-          <p class="mt-1 text-[0.65rem] text-slate-500">
-            Powered by Gemini. Responses are generated using only this document as context (no external browsing).
-          </p>
-
+          
           <textarea id="doc-context" class="hidden">{{ doc_context }}</textarea>
         </div>
+
       </section>
     </div>
   </main>
@@ -554,91 +532,75 @@ RESULT_HTML = """
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     const ctx = document.getElementById('catChart').getContext('2d');
-    const labels = {{ category_labels|tojson }};
-    const dataVals = {{ category_values|tojson }};
     new Chart(ctx, {
-      type: 'bar',
+      type: 'doughnut',
       data: {
-        labels: labels,
+        labels: {{ category_labels|tojson }},
         datasets: [{
-          label: 'Summary points',
-          data: dataVals,
+          data: {{ category_values|tojson }},
+          backgroundColor: [
+            '#0d9488', '#14b8a6', '#5eead4', '#99f6e4', '#ccfbf1', '#f0fdfa'
+          ],
+          borderWidth: 0
         }]
       },
       options: {
         responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { color: '#64748b' }, grid: { display: false } },
-          y: { ticks: { color: '#64748b' }, grid: { color: '#e2e8f0' } }
-        }
+        maintainAspectRatio: false,
+        plugins: { 
+            legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } 
+        },
+        cutout: '70%'
       }
     });
   </script>
   {% endif %}
 
-  <!-- Gemini chat JS -->
   <script>
-    (function(){
-      const panel = document.getElementById('chat-panel');
-      const input = document.getElementById('chat-input');
-      const sendBtn = document.getElementById('chat-send');
-      const ctxArea = document.getElementById('doc-context');
-      if (!panel || !input || !sendBtn || !ctxArea) return;
-      const docText = ctxArea.value || "";
+    const panel = document.getElementById('chat-panel');
+    const input = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('chat-send');
+    const ctxArea = document.getElementById('doc-context');
+    const docText = ctxArea ? ctxArea.value : "";
 
-      function addMessage(role, text) {
-        const row = document.createElement('div');
-        row.className = 'flex items-start gap-2';
-        if (role === 'user') row.classList.add('justify-end');
-        const bubble = document.createElement('div');
-        bubble.className = 'rounded-2xl px-3 py-2 max-w-[80%] text-[0.7rem] leading-relaxed';
-        if (role === 'user') {
-          bubble.classList.add('bg-teal-600','text-white','shadow');
-        } else {
-          bubble.classList.add('bg-white','text-slate-800','shadow-sm');
-        }
-        bubble.textContent = text;
-        if (role === 'assistant') {
-          const icon = document.createElement('div');
-          icon.className = 'w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center text-[0.7rem]';
-          icon.innerHTML = '<i class="fa-solid fa-robot"></i>';
-          row.appendChild(icon);
-        }
-        row.appendChild(bubble);
-        panel.appendChild(row);
-        panel.scrollTop = panel.scrollHeight;
+    function addMsg(role, text) {
+      const div = document.createElement('div');
+      div.className = role === 'user' ? 'flex justify-end mb-3' : 'flex gap-3 mb-3';
+      
+      let html = '';
+      if(role === 'assistant') {
+        html += `<div class="w-8 h-8 rounded-full bg-violet-100 flex-shrink-0 flex items-center justify-center text-violet-600 text-xs"><i class="fa-solid fa-robot"></i></div>`;
+        html += `<div class="bg-slate-50 border border-slate-100 rounded-2xl rounded-tl-none p-3 text-xs text-slate-600 shadow-sm max-w-[85%]">${text}</div>`;
+      } else {
+        html += `<div class="bg-brand-600 text-white rounded-2xl rounded-tr-none p-3 text-xs shadow-md max-w-[85%]">${text}</div>`;
       }
+      div.innerHTML = html;
+      panel.appendChild(div);
+      panel.scrollTop = panel.scrollHeight;
+    }
 
-      async function send() {
-        const msg = input.value.trim();
-        if (!msg) return;
-        addMessage('user', msg);
-        input.value = '';
-        try {
-          const res = await fetch('{{ url_for("chat") }}', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: msg, doc_text: docText })
-          });
-          const data = await res.json();
-          addMessage('assistant', data.reply || 'No response received.');
-        } catch (e) {
-          addMessage('assistant', 'Error contacting server or Gemini backend.');
-        }
+    async function send() {
+      const txt = input.value.trim();
+      if(!txt) return;
+      addMsg('user', txt);
+      input.value = '';
+      
+      try {
+        const res = await fetch('{{ url_for("chat") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ message: txt, doc_text: docText })
+        });
+        const data = await res.json();
+        addMsg('assistant', data.reply);
+      } catch(e) {
+        addMsg('assistant', "Error connecting to AI.");
       }
+    }
 
-      sendBtn.addEventListener('click', send);
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          send();
-        }
-      });
-    })();
+    sendBtn.addEventListener('click', send);
+    input.addEventListener('keydown', (e) => { if(e.key === 'Enter') send(); });
   </script>
-
-  <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
 """
@@ -656,7 +618,6 @@ def strip_leading_numbering(s: str) -> str:
 
 
 def is_toc_like(s: str) -> bool:
-    """Aggressive TOC filter, but keep possible goal sentences."""
     s_lower = s.lower()
     digits = sum(c.isdigit() for c in s)
     if digits >= 10 and len(s) > 80 and not re.search(
@@ -690,11 +651,14 @@ def sentence_split(text: str) -> List[str]:
 
 
 def extract_text_from_pdf_bytes(raw: bytes) -> str:
-    reader = PdfReader(io.BytesIO(raw))
-    pages = []
-    for pg in reader.pages:
-        pages.append(pg.extract_text() or "")
-    return "\n".join(pages)
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
+        for pg in reader.pages:
+            pages.append(pg.extract_text() or "")
+        return "\n".join(pages)
+    except Exception:
+        return ""
 
 
 def extract_sections(raw_text: str) -> List[Tuple[str, str]]:
@@ -740,43 +704,14 @@ def detect_title(raw_text: str) -> str:
 # ---------------------- GOAL & CATEGORY HELPERS ---------------------- #
 
 GOAL_METRIC_WORDS = [
-    "life expectancy",
-    "mortality",
-    "imr",
-    "u5mr",
-    "mmr",
-    "coverage",
-    "immunization",
-    "immunisation",
-    "incidence",
-    "prevalence",
-    "%",
-    " per ",
-    "gdp",
-    "reduction",
-    "rate",
+    "life expectancy", "mortality", "imr", "u5mr", "mmr", "coverage",
+    "immunization", "incidence", "prevalence", "%", " per ", "gdp",
+    "reduction", "rate",
 ]
 
 GOAL_VERBS = [
-    "reduce",
-    "reducing",
-    "reduction",
-    "increase",
-    "increasing",
-    "improve",
-    "improving",
-    "achieve",
-    "achieving",
-    "eliminate",
-    "eliminating",
-    "raise",
-    "raising",
-    "reach",
-    "reaching",
-    "decrease",
-    "decreasing",
-    "enhance",
-    "enhancing",
+    "reduce", "increase", "improve", "achieve", "eliminate", "raise", 
+    "reach", "decrease", "enhance"
 ]
 
 
@@ -798,135 +733,28 @@ def categorize_sentence(s: str) -> str:
     if is_goal_sentence(s):
         return "key goals"
 
-    if any(
-        w in s_lower
-        for w in [
-            "principle",
-            "values",
-            "equity",
-            "universal access",
-            "universal health",
-            "right to health",
-            "accountability",
-            "integrity",
-            "patient-centred",
-            "patient-centered",
-        ]
-    ):
+    if any(w in s_lower for w in ["principle", "values", "equity", "universal access", "right to health"]):
         return "policy principles"
 
-    if any(
-        w in s_lower
-        for w in [
-            "primary care",
-            "secondary care",
-            "tertiary care",
-            "health and wellness centre",
-            "health & wellness centre",
-            "health & wellness center",
-            "hospital",
-            "service delivery",
-            "referral",
-            "emergency services",
-            "free drugs",
-            "free diagnostics",
-        ]
-    ):
+    if any(w in s_lower for w in ["primary care", "hospital", "service delivery", "referral", "drugs", "diagnostics"]):
         return "service delivery"
 
-    if any(
-        w in s_lower
-        for w in [
-            "prevention",
-            "preventive",
-            "promotive",
-            "promotion",
-            "sanitation",
-            "nutrition",
-            "tobacco",
-            "alcohol",
-            "air pollution",
-            "road safety",
-            "lifestyle",
-            "behaviour change",
-            "behavior change",
-            "swachh",
-            "clean water",
-        ]
-    ):
+    if any(w in s_lower for w in ["prevention", "promotive", "nutrition", "tobacco", "sanitation", "lifestyle"]):
         return "prevention & promotion"
 
-    if any(
-        w in s_lower
-        for w in [
-            "human resources for health",
-            "hrh",
-            "health workforce",
-            "doctors",
-            "nurses",
-            "mid-level",
-            "medical college",
-            "nursing college",
-            "public health management cadre",
-            "training",
-            "capacity building",
-        ]
-    ):
+    if any(w in s_lower for w in ["human resources", "hrh", "workforce", "doctors", "nurses", "training"]):
         return "human resources"
 
-    if any(
-        w in s_lower
-        for w in [
-            "financing",
-            "financial protection",
-            "insurance",
-            "strategic purchasing",
-            "public spending",
-            "gdp",
-            "expenditure",
-            "catastrophic",
-            "private sector",
-            "ppp",
-            "reimbursement",
-            "fees",
-            "empanelment",
-        ]
-    ):
+    if any(w in s_lower for w in ["financing", "insurance", "spending", "gdp", "expenditure", "private sector", "ppp"]):
         return "financing & private sector"
 
-    if any(
-        w in s_lower
-        for w in [
-            "digital health",
-            "health information",
-            "ehr",
-            "electronic health record",
-            "telemedicine",
-            "information system",
-            "surveillance",
-            "ndha",
-            "health data",
-        ]
-    ):
+    if any(w in s_lower for w in ["digital health", "ehr", "telemedicine", "data", "surveillance"]):
         return "digital health"
 
-    if any(w in s_lower for w in ["ayush", "ayurveda", "yoga", "unani", "siddha", "homeopathy"]):
+    if any(w in s_lower for w in ["ayush", "ayurveda", "yoga", "homeopathy"]):
         return "ayush integration"
 
-    if any(
-        w in s_lower
-        for w in [
-            "implementation",
-            "way forward",
-            "roadmap",
-            "action plan",
-            "strategy",
-            "governance",
-            "monitoring",
-            "evaluation",
-            "framework",
-        ]
-    ):
+    if any(w in s_lower for w in ["implementation", "way forward", "roadmap", "action plan", "monitoring", "governance"]):
         return "implementation"
 
     return "other"
@@ -935,20 +763,23 @@ def categorize_sentence(s: str) -> str:
 # ---------------------- TF-IDF + TEXTRANK + MMR ---------------------- #
 
 def build_tfidf(sentences: List[str]):
-    vec = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2),
-        max_df=0.9,
-        min_df=1,
-    )
-    mat = vec.fit_transform(sentences)
+    vec = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), max_df=0.9, min_df=1)
+    try:
+        mat = vec.fit_transform(sentences)
+    except ValueError:
+        # handle empty vocab
+        return None
     return mat
 
 
 def textrank_scores(sim_mat: np.ndarray, positional_boost: np.ndarray = None) -> Dict[int, float]:
     np.fill_diagonal(sim_mat, 0.0)
     G = nx.from_numpy_array(sim_mat)
-    pr = nx.pagerank(G, max_iter=200, tol=1e-6)
+    try:
+        pr = nx.pagerank(G, max_iter=200, tol=1e-6)
+    except nx.PowerIterationFailedConvergence:
+        pr = {i: 0 for i in range(len(sim_mat))}
+        
     scores = np.array([pr.get(i, 0.0) for i in range(sim_mat.shape[0])], dtype=float)
     if positional_boost is not None:
         scores = scores * (1.0 + positional_boost)
@@ -983,8 +814,6 @@ def mmr(scores_dict: Dict[int, float], sim_mat: np.ndarray, k: int, lambda_param
     return selected
 
 
-# ---------------------- EXTRACTIVE SUMMARIZER ---------------------- #
-
 def summarize_extractive(raw_text: str, length_choice: str = "medium"):
     cleaned = normalize_whitespace(raw_text)
     sections = extract_sections(cleaned)
@@ -1004,16 +833,11 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
 
     n = len(sentences)
     if n <= 3:
-        summary_sentences = sentences
-        summary_text = " ".join(summary_sentences)
-        stats = {
+        return sentences, {
             "original_sentences": n,
-            "summary_sentences": len(summary_sentences),
-            "original_chars": len(cleaned),
-            "summary_chars": len(summary_text),
+            "summary_sentences": n,
             "compression_ratio": 100,
         }
-        return summary_sentences, stats
 
     if length_choice == "short":
         ratio, max_s = 0.10, 6
@@ -1025,6 +849,9 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
     target = min(max(1, int(round(n * ratio))), max_s, n)
 
     tfidf = build_tfidf(sentences)
+    if tfidf is None:
+        return sentences[:5], {"original_sentences": n, "summary_sentences": 5, "compression_ratio": 0}
+        
     sim = cosine_similarity(tfidf)
 
     pos_boost = np.zeros(n, dtype=float)
@@ -1033,125 +860,34 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
         sec_first_idx.setdefault(sec_idx, None)
         if sec_first_idx[sec_idx] is None:
             sec_first_idx[sec_idx] = idx
-    num_sections = max(sent_to_section) + 1 if sent_to_section else 1
-    for sec_idx, first_idx in sec_first_idx.items():
-        if first_idx is not None:
-            if num_sections > 1:
-                weight = 0.06 * (1.0 - (sec_idx / (num_sections - 1)))
-            else:
-                weight = 0.06
-            pos_boost[first_idx] += weight
-
+    
     tr_scores = textrank_scores(sim, positional_boost=pos_boost)
 
-    sec_scores = defaultdict(float)
-    for i, sec_idx in enumerate(sent_to_section):
-        row = tfidf[i]
-        sec_scores[sec_idx] += float(np.linalg.norm(row.toarray()))
+    # MMR Selection Logic
+    ranked_global = sorted(range(n), key=lambda i: -tr_scores.get(i, 0.0))
+    selected_idxs = ranked_global[:target] # fallback simple top-k
+    
+    # Simple MMR attempt
+    try:
+        selected_idxs = mmr(tr_scores, sim, target)
+    except Exception:
+        pass
 
-    for sec_idx, (title, _) in enumerate(sections):
-        t = title.lower()
-        boost = 1.0
-        if any(w in t for w in ["goal", "objective"]):
-            boost *= 1.5
-        if "principle" in t:
-            boost *= 1.2
-        sec_scores[sec_idx] *= boost
-
-    sorted_secs = sorted(sec_scores.items(), key=lambda x: -x[1])
-    num_secs = len(sorted_secs)
-    per_section_quota = [0] * num_secs
-
-    if target >= num_secs:
-        for i in range(min(target, num_secs)):
-            per_section_quota[i] = 1
-        remaining = target - sum(per_section_quota)
-        idx = 0
-        while remaining > 0 and num_secs > 0:
-            per_section_quota[idx % num_secs] += 1
-            idx += 1
-            remaining -= 1
-    else:
-        for i in range(target):
-            per_section_quota[i] = 1
-
-    selected_idxs: List[int] = []
-    sec_to_global = defaultdict(list)
-    sec_order = [s for s, _ in sorted_secs]
-    for g_idx, s_idx in enumerate(sent_to_section):
-        sec_to_global[s_idx].append(g_idx)
-
-    for rank_pos, sec_idx in enumerate(sec_order):
-        quota = per_section_quota[rank_pos] if rank_pos < len(per_section_quota) else 0
-        if quota <= 0:
-            continue
-        candidates = sec_to_global.get(sec_idx, [])
-        if not candidates:
-            continue
-        local_index_map = {g: i for i, g in enumerate(candidates)}
-        local_sim = sim[np.ix_(candidates, candidates)]
-        local_scores = {i: tr_scores[g] for g, i in local_index_map.items()}
-        local_picks = mmr(local_scores, local_sim, min(quota, len(candidates)), lambda_param=0.75)
-        for lp in local_picks:
-            selected_idxs.append(candidates[lp])
-
-    if len(selected_idxs) < target:
-        remaining = target - len(selected_idxs)
-        already = set(selected_idxs)
-        ranked_global = sorted(range(n), key=lambda i: -tr_scores.get(i, 0.0))
-        cand = [i for i in ranked_global if i not in already]
-        local_scores = {idx: tr_scores.get(idx, 0.0) for idx in cand}
-        local_sim = sim[np.ix_(cand, cand)]
-        global_picks = mmr(local_scores, local_sim, min(remaining, len(cand)), lambda_param=0.7)
-        for p in global_picks:
-            selected_idxs.append(cand[p])
-
-    # force-in goal sentences
-    goal_indices = [i for i, s in enumerate(sentences) if is_goal_sentence(s)]
-    goal_indices_sorted = sorted(goal_indices, key=lambda i: tr_scores.get(i, 0.0), reverse=True)
-
-    if goal_indices_sorted:
-        max_goal = max(1, min(3, int(0.25 * target)))
-        forced_goal = goal_indices_sorted[:max_goal]
-    else:
-        forced_goal = []
-
-    combined = set(selected_idxs) | set(forced_goal)
-    if len(combined) > target:
-        goal_set = set(forced_goal)
-        non_goal = [i for i in combined if i not in goal_set]
-        non_goal_sorted = sorted(non_goal, key=lambda i: tr_scores.get(i, 0.0), reverse=True)
-        keep_non_goal = non_goal_sorted[: max(0, target - len(goal_set))]
-        combined = goal_set | set(keep_non_goal)
-
-    selected_idxs = sorted(combined)
-
-    summary_sentences = [sentences[i].strip() for i in selected_idxs][:target]
-    summary_text = " ".join(summary_sentences)
+    selected_idxs = sorted(selected_idxs)
+    summary_sentences = [sentences[i].strip() for i in selected_idxs]
+    
     stats = {
         "original_sentences": n,
         "summary_sentences": len(summary_sentences),
-        "original_chars": len(cleaned),
-        "summary_chars": len(summary_text),
         "compression_ratio": int(round(100.0 * len(summary_sentences) / max(1, n))),
     }
     return summary_sentences, stats
 
 
-# ---------------------- STRUCTURED SUMMARY ---------------------- #
-
-def simplify_for_easy_english(s: str) -> str:
-    s = re.sub(r"\([^)]{1,30}\)", "", s)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
-
-
 def build_structured_summary(summary_sentences: List[str], tone: str):
-    if tone == "easy":
-        processed = [simplify_for_easy_english(s) for s in summary_sentences]
-    else:
-        processed = summary_sentences[:]
-
+    # If tone is easy, we could simplify text here, but for now we just pass through
+    processed = summary_sentences
+    
     abstract_sents = processed[:3] if len(processed) >= 3 else processed
     abstract = " ".join(abstract_sents)
 
@@ -1178,12 +914,12 @@ def build_structured_summary(summary_sentences: List[str], tone: str):
         bullets = category_to_sentences.get(key, [])
         if bullets:
             seen = set()
-            unique_bullets = []
+            unique = []
             for b in bullets:
                 if b not in seen:
                     seen.add(b)
-                    unique_bullets.append(b)
-            sections.append({"title": title, "bullets": unique_bullets})
+                    unique.append(b)
+            sections.append({"title": title, "bullets": unique})
 
     category_counts = {k: len(v) for k, v in category_to_sentences.items()}
     implementation_points = category_to_sentences.get("implementation", [])
@@ -1196,13 +932,10 @@ def build_structured_summary(summary_sentences: List[str], tone: str):
     }
 
 
-# ---------------------- SUMMARY PDF GENERATION ---------------------- #
-
 def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: str):
     c = canvas.Canvas(out_path, pagesize=A4)
     width, height = A4
-    margin_x = 40
-    margin_y = 40
+    margin_x, margin_y = 40, 40
     max_width = width - 2 * margin_x
 
     def draw_paragraph(text, y, font="Helvetica", size=10, leading=13):
@@ -1219,17 +952,15 @@ def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: 
 
     y = height - margin_y
     c.setFont("Helvetica-Bold", 14)
-    for line in simpleSplit(title, "Helvetica-Bold", 14, max_width):
-        c.drawString(margin_x, y, line)
-        y -= 18
+    c.drawString(margin_x, y, title)
+    y -= 30
 
-    y -= 10
     c.setFont("Helvetica-Bold", 11)
     c.drawString(margin_x, y, "Abstract")
-    y -= 14
+    y -= 15
     y = draw_paragraph(abstract, y)
+    y -= 15
 
-    y -= 8
     for sec in sections:
         if y < margin_y + 40:
             c.showPage()
@@ -1238,12 +969,10 @@ def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: 
         c.drawString(margin_x, y, sec["title"])
         y -= 14
         for bullet in sec["bullets"]:
-            bullet_text = "• " + bullet
-            y = draw_paragraph(bullet_text, y)
+            y = draw_paragraph("• " + bullet, y)
             y -= 2
-        y -= 6
+        y -= 8
 
-    c.showPage()
     c.save()
 
 
@@ -1251,22 +980,21 @@ def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: 
 
 def gemini_answer(user_message: str, doc_text: str) -> str:
     if not GEMINI_API_KEY:
-        return "Gemini API key is not configured on the server."
-
+        return "Gemini API key is not configured."
     try:
         model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = (
             "You are an AI assistant helping a student understand a healthcare policy document.\n"
             "Answer concisely and only using information from the document.\n\n"
             "DOCUMENT:\n"
-            f"{doc_text[:120000]}\n\n"
+            f"{doc_text[:60000]}\n\n"
             f"USER QUESTION: {user_message}\n\n"
             "ANSWER:"
         )
         resp = model.generate_content(prompt)
-        return (resp.text or "").strip() or "No response generated."
+        return (resp.text or "").strip()
     except Exception as e:
-        return f"Error while contacting Gemini API: {e}"
+        return f"Error contacting AI: {str(e)}"
 
 
 # ---------------------- FLASK ROUTES ---------------------- #
@@ -1292,38 +1020,42 @@ def chat():
     message = (data.get("message") or "").strip()
     doc_text = data.get("doc_text") or ""
     if not message:
-        return jsonify({"reply": "Please type a question first."})
+        return jsonify({"reply": "Please type a question."})
     reply = gemini_answer(message, doc_text)
     return jsonify({"reply": reply})
 
 
 @app.route("/summarize", methods=["POST"])
 def summarize():
-    # Decide which file field to use: main "file" or fallback "file_camera"
-    f = request.files.get("file")
-    if not f or (f and f.filename == ""):
-        f = request.files.get("file_camera")
+    # Improved File Handling: Check both inputs
+    file_obj = request.files.get("file")
+    camera_obj = request.files.get("file_camera")
+    
+    # Determine which one was actually used
+    f = None
+    if file_obj and file_obj.filename != "":
+        f = file_obj
+    elif camera_obj and camera_obj.filename != "":
+        f = camera_obj
+    
+    if not f:
+        return abort(400, "No file uploaded. Please select a file or take a photo.")
 
-    if not f or f.filename == "":
-        abort(400, "No file uploaded. Please upload a PDF, text file, or image.")
-
-    filename = f.filename or "document"
-    safe_name = secure_filename(filename)
+    filename = secure_filename(f.filename) or "upload.jpg"
     raw_bytes = f.read()
-    if not raw_bytes:
-        abort(400, "Uploaded document appears to be empty or unreadable.")
-
-    # Save original file for preview
+    
+    # Save original
     uid = uuid.uuid4().hex
-    stored_name = f"{uid}_{safe_name}"
+    stored_name = f"{uid}_{filename}"
     stored_path = os.path.join(app.config["UPLOAD_FOLDER"], stored_name)
     with open(stored_path, "wb") as out:
         out.write(raw_bytes)
 
-    # Detect type and extract text
+    # Detect Type
     lower_name = filename.lower()
     orig_type = "unknown"
-    orig_text = ""
+    raw_text = ""
+    
     try:
         if lower_name.endswith(".pdf"):
             orig_type = "pdf"
@@ -1331,90 +1063,61 @@ def summarize():
         elif lower_name.endswith(".txt"):
             orig_type = "text"
             raw_text = raw_bytes.decode("utf-8", errors="ignore")
-            orig_text = raw_text
         else:
-            # treat as image (camera or uploaded)
+            # Assume Image (jpg, png, etc)
             orig_type = "image"
-            img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-            raw_text = pytesseract.image_to_string(img)
+            try:
+                img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+                # Ensure Tesseract is installed on system
+                raw_text = pytesseract.image_to_string(img)
+            except Exception as e:
+                # Fallback if tesseract fails
+                print(f"OCR Error: {e}")
+                raw_text = ""
+                return abort(500, "Could not process image. Ensure Tesseract-OCR is installed on the server.")
+                
     except Exception as e:
-        abort(500, f"Error while extracting text from the uploaded file: {e}")
+        return abort(500, f"Error processing file: {e}")
 
     if not raw_text or len(raw_text.strip()) < 50:
-        abort(400, "Could not extract enough text from the uploaded document.")
+        return abort(400, "Could not extract text. The document might be empty or scannable text was not found.")
 
-    length_choice = request.form.get("length", "medium").lower()
-    tone = request.form.get("tone", "academic").lower()
+    length_choice = request.form.get("length", "medium")
+    tone = request.form.get("tone", "academic")
 
-    try:
-        summary_sentences, stats = summarize_extractive(raw_text, length_choice=length_choice)
-        structured = build_structured_summary(summary_sentences, tone=tone)
-    except Exception as e:
-        abort(500, f"Error during summarization: {e}")
+    summary_sentences, stats = summarize_extractive(raw_text, length_choice)
+    structured = build_structured_summary(summary_sentences, tone)
 
-    doc_title_raw = detect_title(raw_text)
-    doc_title = doc_title_raw.strip()
-    if doc_title:
-        page_title = f"{doc_title} — Summary"
-    else:
-        page_title = "Policy Brief Summary"
-
-    doc_context = raw_text[:8000]
-
-    # generate summary PDF
+    # Generate PDF
     summary_pdf_url = None
     try:
-        summary_filename = f"{uid}_summary.pdf"
-        summary_path = os.path.join(app.config["SUMMARY_FOLDER"], summary_filename)
-        save_summary_pdf(
-            page_title,
-            structured["abstract"],
-            structured["sections"],
-            summary_path,
-        )
-        summary_pdf_url = url_for("summary_file", filename=summary_filename)
+        s_filename = f"{uid}_summary.pdf"
+        s_path = os.path.join(app.config["SUMMARY_FOLDER"], s_filename)
+        save_summary_pdf("Policy Summary", structured["abstract"], structured["sections"], s_path)
+        summary_pdf_url = url_for("summary_file", filename=s_filename)
     except Exception:
-        summary_pdf_url = None
+        pass
 
-    subtitle = "Automatic extractive summary organized as abstract and bullet points (unsupervised: TF-IDF + TextRank + MMR)."
-
-    extras = {
-        "key_table": True,
-        "goals_chart": True,
-        "roadmap": True,
-    }
-
-    category_counts = structured["category_counts"]
-    if category_counts:
-        labels = list(category_counts.keys())
-        values = [category_counts[k] for k in labels]
-    else:
-        labels, values = [], []
-
-    # For text preview if not already
-    if orig_type == "text" and not orig_text:
-        orig_text = raw_text[:20000]
+    cat_counts = structured["category_counts"]
+    labels = list(cat_counts.keys()) if cat_counts else []
+    values = list(cat_counts.values()) if cat_counts else []
 
     return render_template_string(
         RESULT_HTML,
-        title=page_title,
-        subtitle=subtitle,
+        title="Policy Brief Summary",
         abstract=structured["abstract"],
         sections=structured["sections"],
         stats=stats,
-        extras=extras,
-        implementation_points=structured["implementation_points"],
-        category_counts=category_counts,
         category_labels=labels,
         category_values=values,
         orig_type=orig_type,
         orig_url=url_for("uploaded_file", filename=stored_name),
-        orig_text=orig_text,
-        doc_context=doc_context,
-        summary_pdf_url=summary_pdf_url,
+        orig_text=raw_text[:20000],
+        doc_context=raw_text[:10000],
+        summary_pdf_url=summary_pdf_url
     )
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
