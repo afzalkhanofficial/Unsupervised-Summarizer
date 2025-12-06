@@ -22,7 +22,7 @@ from PyPDF2 import PdfReader
 from werkzeug.utils import secure_filename
 
 from PIL import Image
-# Removed pytesseract import
+# pytesseract removed
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -44,7 +44,6 @@ os.makedirs(SUMMARY_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["SUMMARY_FOLDER"] = SUMMARY_FOLDER
 
-# API Key Check
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     try:
@@ -108,7 +107,8 @@ INDEX_HTML = """
       display: none; /* Hidden by default */
       position: fixed;
       top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(255, 255, 255, 0.95);
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(5px);
       z-index: 9999;
       justify-content: center;
       align-items: center;
@@ -136,8 +136,8 @@ INDEX_HTML = """
 
   <div id="loading-overlay">
     <div class="loader mb-6"></div>
-    <h2 class="text-2xl font-bold text-slate-800 animate-pulse">Analyzing Document...</h2>
-    <p class="text-slate-500 mt-2 text-sm font-medium">Running Extraction & TF-IDF Algorithms</p>
+    <h2 class="text-2xl font-bold text-slate-800 animate-pulse">Analyzing Policy Document...</h2>
+    <p class="text-slate-500 mt-2 text-sm">Running TF-IDF & TextRank algorithms</p>
     
     <div class="w-64 h-2 bg-slate-200 rounded-full mt-6 overflow-hidden">
       <div class="h-full bg-brand-600 rounded-full animate-[progress_3s_ease-in-out_infinite]"></div>
@@ -326,24 +326,29 @@ INDEX_HTML = """
     fileInput.addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
         updateFileDisplay(e.target.files[0].name);
+        // Clear camera input if file input is used
         cameraInput.value = '';
       }
     });
 
     cameraInput.addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
+        // For camera captures, names can be generic like "image.jpg"
         updateFileDisplay("Captured Image");
+        // Clear file input if camera is used
         fileInput.value = '';
       }
     });
 
     // Form Submit Handler -> Show Loading
     form.addEventListener('submit', (e) => {
+      // Basic validation
       if (!fileInput.value && !cameraInput.value) {
         e.preventDefault();
         alert("Please select a file or take a photo first.");
         return;
       }
+      // Show loading overlay
       loadingOverlay.style.display = 'flex';
     });
   </script>
@@ -453,17 +458,6 @@ RESULT_HTML = """
           </div>
           {% endif %}
         </div>
-
-        <div class="bg-white rounded-3xl shadow-xl border border-slate-100 p-6 md:p-8">
-          <h2 class="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <i class="fa-solid fa-chart-pie text-brand-500"></i> Topic Coverage
-          </h2>
-          {% if category_labels %}
-            <canvas id="catChart" height="120"></canvas>
-          {% else %}
-            <p class="text-xs text-slate-400">Not enough data for analytics.</p>
-          {% endif %}
-        </div>
       </section>
 
       <section class="lg:col-span-5 space-y-6">
@@ -519,34 +513,6 @@ RESULT_HTML = """
       </section>
     </div>
   </main>
-
-  {% if category_labels %}
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script>
-    const ctx = document.getElementById('catChart').getContext('2d');
-    new Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels: {{ category_labels|tojson }},
-        datasets: [{
-          data: {{ category_values|tojson }},
-          backgroundColor: [
-            '#0d9488', '#14b8a6', '#5eead4', '#99f6e4', '#ccfbf1', '#f0fdfa'
-          ],
-          borderWidth: 0
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { 
-            legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } 
-        },
-        cutout: '70%'
-      }
-    });
-  </script>
-  {% endif %}
 
   <script>
     const panel = document.getElementById('chat-panel');
@@ -680,6 +646,17 @@ def extract_sections(raw_text: str) -> List[Tuple[str, str]]:
 
     cleaned = [(t, normalize_whitespace(b)) for t, b in sections if b.strip()]
     return cleaned
+
+
+def detect_title(raw_text: str) -> str:
+    for line in raw_text.splitlines():
+        s = line.strip()
+        if len(s) < 5:
+            continue
+        if "content" in s.lower():
+            break
+        return s
+    return "Policy Document"
 
 
 # ---------------------- GOAL & CATEGORY HELPERS ---------------------- #
@@ -844,9 +821,11 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
     
     tr_scores = textrank_scores(sim, positional_boost=pos_boost)
 
+    # MMR Selection Logic
     ranked_global = sorted(range(n), key=lambda i: -tr_scores.get(i, 0.0))
-    selected_idxs = ranked_global[:target] 
+    selected_idxs = ranked_global[:target] # fallback simple top-k
     
+    # Simple MMR attempt
     try:
         selected_idxs = mmr(tr_scores, sim, target)
     except Exception:
@@ -864,6 +843,7 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
 
 
 def build_structured_summary(summary_sentences: List[str], tone: str):
+    # If tone is easy, we could simplify text here, but for now we just pass through
     processed = summary_sentences
     
     abstract_sents = processed[:3] if len(processed) >= 3 else processed
@@ -956,29 +936,31 @@ def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: 
 
 # ---------------------- GEMINI HELPERS ---------------------- #
 
-def gemini_extract_text(image_bytes: bytes) -> str:
-    """Uses Gemini Vision to extract text (OCR replacement)."""
+def gemini_extract_text_from_image(raw_bytes: bytes) -> str:
+    """Uses Gemini Vision to transcribe text from an image (OCR)."""
     if not GEMINI_API_KEY:
-        raise Exception("Gemini API Key missing")
+        raise ValueError("Gemini API Key missing")
     
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash") # or gemini-1.5-flash
-        
-        # Convert bytes to PIL Image
-        img = Image.open(io.BytesIO(image_bytes))
-        
-        prompt = "Transcribe all the text visible in this image exactly as it appears. Do not summarize. Just extract the text."
+        model = genai.GenerativeModel("gemini-2.0-flash-exp") # or gemini-1.5-flash
+    except Exception:
+        # Fallback to standard 1.5 if 2.0-flash-exp not available
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+    try:
+        img = Image.open(io.BytesIO(raw_bytes))
+        prompt = "Transcribe the text in this image exactly as it appears. Do not summarize it. Just give me the text."
         response = model.generate_content([prompt, img])
-        return response.text
+        return (response.text or "").strip()
     except Exception as e:
-        print(f"Gemini OCR Error: {e}")
+        print(f"Gemini Vision Error: {e}")
         return ""
 
 def gemini_answer(user_message: str, doc_text: str) -> str:
     if not GEMINI_API_KEY:
         return "Gemini API key is not configured."
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         prompt = (
             "You are an AI assistant helping a student understand a healthcare policy document.\n"
             "Answer concisely and only using information from the document.\n\n"
@@ -1023,10 +1005,11 @@ def chat():
 
 @app.route("/summarize", methods=["POST"])
 def summarize():
-    # Improved File Handling
+    # Improved File Handling: Check both inputs
     file_obj = request.files.get("file")
     camera_obj = request.files.get("file_camera")
     
+    # Determine which one was actually used
     f = None
     if file_obj and file_obj.filename != "":
         f = file_obj
@@ -1059,23 +1042,21 @@ def summarize():
             orig_type = "text"
             raw_text = raw_bytes.decode("utf-8", errors="ignore")
         else:
-            # Assume Image -> Send to Gemini for OCR
+            # Assume Image -> Use GEMINI Vision
             orig_type = "image"
-            raw_text = gemini_extract_text(raw_bytes)
+            raw_text = gemini_extract_text_from_image(raw_bytes)
             
-            if not raw_text:
-                return abort(500, "AI could not read text from the image. Please try a clearer photo.")
-                
     except Exception as e:
         return abort(500, f"Error processing file: {e}")
 
-    if not raw_text or len(raw_text.strip()) < 50:
-        return abort(400, "Could not extract enough text. The document might be empty or blurry.")
+    if not raw_text or len(raw_text.strip()) < 20:
+        return abort(400, "Could not extract text. The document might be empty, or the AI could not read the image.")
 
-    # Continue with ML Model (TF-IDF/TextRank)
     length_choice = request.form.get("length", "medium")
     tone = request.form.get("tone", "academic")
 
+    # Pass the text extracted (via PDF library or Gemini) to the local ML Summarizer
+    # This preserves the "stats" and "unsupervised" behavior logic
     summary_sentences, stats = summarize_extractive(raw_text, length_choice)
     structured = build_structured_summary(summary_sentences, tone)
 
