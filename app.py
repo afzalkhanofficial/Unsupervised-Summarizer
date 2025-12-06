@@ -790,7 +790,7 @@ def process_image_with_gemini(image_path: str):
         return None, "Gemini API Key missing."
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash") # 1.5 Flash is efficient for vision
+        model = genai.GenerativeModel("gemini-2.5-flash")
         
         # Load image
         img = Image.open(image_path)
@@ -897,7 +897,7 @@ def chat():
         return jsonify({"reply": "Gemini Key not configured."})
         
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         chat = model.start_chat(history=[])
         prompt = f"Context from document: {doc_text[:30000]}\n\nUser Question: {message}\nAnswer concisely."
         resp = chat.send_message(prompt)
