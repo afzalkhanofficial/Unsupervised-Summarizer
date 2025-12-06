@@ -22,7 +22,7 @@ from PyPDF2 import PdfReader
 from werkzeug.utils import secure_filename
 
 from PIL import Image
-import pytesseract
+# Removed pytesseract import
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -31,9 +31,6 @@ from reportlab.lib.utils import simpleSplit
 import google.generativeai as genai
 
 # ---------------------- CONFIG ---------------------- #
-
-# If you are on Windows, you might need to point to tesseract cmd specifically:
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 app = Flask(__name__)
 
@@ -47,6 +44,7 @@ os.makedirs(SUMMARY_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["SUMMARY_FOLDER"] = SUMMARY_FOLDER
 
+# API Key Check
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     try:
@@ -110,8 +108,7 @@ INDEX_HTML = """
       display: none; /* Hidden by default */
       position: fixed;
       top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(255, 255, 255, 0.9);
-      backdrop-filter: blur(5px);
+      background: rgba(255, 255, 255, 0.95);
       z-index: 9999;
       justify-content: center;
       align-items: center;
@@ -139,8 +136,8 @@ INDEX_HTML = """
 
   <div id="loading-overlay">
     <div class="loader mb-6"></div>
-    <h2 class="text-2xl font-bold text-slate-800 animate-pulse">Analyzing Policy Document...</h2>
-    <p class="text-slate-500 mt-2 text-sm">Running TF-IDF & TextRank algorithms</p>
+    <h2 class="text-2xl font-bold text-slate-800 animate-pulse">Analyzing Document...</h2>
+    <p class="text-slate-500 mt-2 text-sm font-medium">Running Extraction & TF-IDF Algorithms</p>
     
     <div class="w-64 h-2 bg-slate-200 rounded-full mt-6 overflow-hidden">
       <div class="h-full bg-brand-600 rounded-full animate-[progress_3s_ease-in-out_infinite]"></div>
@@ -189,7 +186,7 @@ INDEX_HTML = """
             <div class="space-y-6">
               <div>
                 <h3 class="text-lg font-bold text-slate-900 mb-1">Document Input</h3>
-                <p class="text-sm text-slate-500">Supported: PDF, TXT, Images (OCR)</p>
+                <p class="text-sm text-slate-500">Supported: PDF, TXT, Images</p>
               </div>
 
               <div class="group relative border-2 border-dashed border-slate-300 hover:border-brand-400 rounded-2xl bg-slate-50 hover:bg-brand-50/30 transition-all duration-300 p-8 text-center cursor-pointer">
@@ -329,29 +326,24 @@ INDEX_HTML = """
     fileInput.addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
         updateFileDisplay(e.target.files[0].name);
-        // Clear camera input if file input is used
         cameraInput.value = '';
       }
     });
 
     cameraInput.addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
-        // For camera captures, names can be generic like "image.jpg"
         updateFileDisplay("Captured Image");
-        // Clear file input if camera is used
         fileInput.value = '';
       }
     });
 
     // Form Submit Handler -> Show Loading
     form.addEventListener('submit', (e) => {
-      // Basic validation
       if (!fileInput.value && !cameraInput.value) {
         e.preventDefault();
         alert("Please select a file or take a photo first.");
         return;
       }
-      // Show loading overlay
       loadingOverlay.style.display = 'flex';
     });
   </script>
@@ -690,17 +682,6 @@ def extract_sections(raw_text: str) -> List[Tuple[str, str]]:
     return cleaned
 
 
-def detect_title(raw_text: str) -> str:
-    for line in raw_text.splitlines():
-        s = line.strip()
-        if len(s) < 5:
-            continue
-        if "content" in s.lower():
-            break
-        return s
-    return "Policy Document"
-
-
 # ---------------------- GOAL & CATEGORY HELPERS ---------------------- #
 
 GOAL_METRIC_WORDS = [
@@ -863,11 +844,9 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
     
     tr_scores = textrank_scores(sim, positional_boost=pos_boost)
 
-    # MMR Selection Logic
     ranked_global = sorted(range(n), key=lambda i: -tr_scores.get(i, 0.0))
-    selected_idxs = ranked_global[:target] # fallback simple top-k
+    selected_idxs = ranked_global[:target] 
     
-    # Simple MMR attempt
     try:
         selected_idxs = mmr(tr_scores, sim, target)
     except Exception:
@@ -885,7 +864,6 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
 
 
 def build_structured_summary(summary_sentences: List[str], tone: str):
-    # If tone is easy, we could simplify text here, but for now we just pass through
     processed = summary_sentences
     
     abstract_sents = processed[:3] if len(processed) >= 3 else processed
@@ -976,7 +954,25 @@ def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: 
     c.save()
 
 
-# ---------------------- GEMINI CHAT ---------------------- #
+# ---------------------- GEMINI HELPERS ---------------------- #
+
+def gemini_extract_text(image_bytes: bytes) -> str:
+    """Uses Gemini Vision to extract text (OCR replacement)."""
+    if not GEMINI_API_KEY:
+        raise Exception("Gemini API Key missing")
+    
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash") # or gemini-1.5-flash
+        
+        # Convert bytes to PIL Image
+        img = Image.open(io.BytesIO(image_bytes))
+        
+        prompt = "Transcribe all the text visible in this image exactly as it appears. Do not summarize. Just extract the text."
+        response = model.generate_content([prompt, img])
+        return response.text
+    except Exception as e:
+        print(f"Gemini OCR Error: {e}")
+        return ""
 
 def gemini_answer(user_message: str, doc_text: str) -> str:
     if not GEMINI_API_KEY:
@@ -1027,11 +1023,10 @@ def chat():
 
 @app.route("/summarize", methods=["POST"])
 def summarize():
-    # Improved File Handling: Check both inputs
+    # Improved File Handling
     file_obj = request.files.get("file")
     camera_obj = request.files.get("file_camera")
     
-    # Determine which one was actually used
     f = None
     if file_obj and file_obj.filename != "":
         f = file_obj
@@ -1064,24 +1059,20 @@ def summarize():
             orig_type = "text"
             raw_text = raw_bytes.decode("utf-8", errors="ignore")
         else:
-            # Assume Image (jpg, png, etc)
+            # Assume Image -> Send to Gemini for OCR
             orig_type = "image"
-            try:
-                img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-                # Ensure Tesseract is installed on system
-                raw_text = pytesseract.image_to_string(img)
-            except Exception as e:
-                # Fallback if tesseract fails
-                print(f"OCR Error: {e}")
-                raw_text = ""
-                return abort(500, "Could not process image. Ensure Tesseract-OCR is installed on the server.")
+            raw_text = gemini_extract_text(raw_bytes)
+            
+            if not raw_text:
+                return abort(500, "AI could not read text from the image. Please try a clearer photo.")
                 
     except Exception as e:
         return abort(500, f"Error processing file: {e}")
 
     if not raw_text or len(raw_text.strip()) < 50:
-        return abort(400, "Could not extract text. The document might be empty or scannable text was not found.")
+        return abort(400, "Could not extract enough text. The document might be empty or blurry.")
 
+    # Continue with ML Model (TF-IDF/TextRank)
     length_choice = request.form.get("length", "medium")
     tone = request.form.get("tone", "academic")
 
