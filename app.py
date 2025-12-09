@@ -811,11 +811,24 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
     sentences = sentence_split(cleaned)
     n = len(sentences)
     
-    if n <= 5: return sentences, {} # Too short to summarize
+    if n <= 3: return sentences, {} # Too short to summarize
 
-    # 3. Target Length
-    ratio = 0.15 if length_choice == "short" else (0.40 if length_choice == "long" else 0.25)
-    target_k = min(max(5, int(n * ratio)), 40) # Min 5 sentences, Max 40
+    # 3. Target Length (Updated logic)
+    # Aggressive ratios for distinct output
+    if length_choice == "short":
+        ratio = 0.10
+        min_k = 3
+        max_k = 15
+    elif length_choice == "long":
+        ratio = 0.50
+        min_k = 10
+        max_k = 50
+    else: # medium
+        ratio = 0.25
+        min_k = 5
+        max_k = 25
+
+    target_k = min(max(min_k, int(n * ratio)), max_k, n) # Ensure strict bounds
     
     # 4. Vectorization & Similarity
     tfidf_mat = build_tfidf(sentences)
@@ -853,24 +866,37 @@ def build_structured_summary(summary_sentences: List[str], tone: str):
     
     sections = []
     
-    # Helper to clean text
+    # Helper to clean text based on Tone
     def clean_bullet(txt):
         if tone == "easy":
-            # Very basic simplification (removing jargon parens)
+            # 1. Remove stuff in parentheses
             txt = re.sub(r'\([^)]*\)', '', txt)
+            # 2. Remove common academic connectors for "Simple" look
+            txt = re.sub(r'^(However|Therefore|Furthermore|Moreover|Thus|Hence|Consequently),?\s*', '', txt, flags=re.IGNORECASE)
+            # 3. Remove "In conclusion" type starts
+            txt = re.sub(r'^(In conclusion|In summary|To conclude),?\s*', '', txt, flags=re.IGNORECASE)
+            # 4. Remove citation brackets [1], [12-14]
+            txt = re.sub(r'\[[\d,\-\s]+\]', '', txt)
+            
         return txt.strip()
 
     for k, title in section_titles.items():
         if cat_map[k]:
             unique = list(dict.fromkeys([clean_bullet(s) for s in cat_map[k]]))
-            sections.append({"title": title, "bullets": unique})
+            # Filter out empty strings after cleaning
+            unique = [u for u in unique if len(u) > 10]
+            if unique:
+                sections.append({"title": title, "bullets": unique})
             
-    # Abstract: Take the highest ranked sentences that were classified as 'goals' or 'principles' first
-    # If not enough, take from the start of the summary
+    # Abstract construction
     abstract_candidates = cat_map['key goals'] + cat_map['policy principles'] + summary_sentences
-    abstract = " ".join(list(dict.fromkeys(abstract_candidates))[:3])
+    # Apply cleaning to abstract too
+    abstract_cleaned = [clean_bullet(s) for s in abstract_candidates]
+    abstract_cleaned = [s for s in abstract_cleaned if len(s) > 10]
+    abstract = " ".join(list(dict.fromkeys(abstract_cleaned))[:3])
     
     impl_points = [clean_bullet(s) for s in cat_map.get("implementation", [])]
+    impl_points = [p for p in impl_points if len(p) > 10]
     
     return {
         "abstract": abstract,
@@ -886,7 +912,7 @@ def process_image_with_gemini(image_path: str):
         return None, "Gemini API Key missing."
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         img = Image.open(image_path)
         
         prompt = """
@@ -988,7 +1014,7 @@ def chat():
         return jsonify({"reply": "Gemini Key not configured."})
         
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         chat = model.start_chat(history=[])
         prompt = f"Context from document: {doc_text[:30000]}\n\nUser Question: {message}\nAnswer concisely."
         resp = chat.send_message(prompt)
