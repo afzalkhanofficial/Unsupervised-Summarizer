@@ -4,7 +4,7 @@ import re
 import uuid
 import json
 import time
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import List, Tuple, Dict, Any
 
 import numpy as np
@@ -31,7 +31,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
 
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # ---------------------- CONFIG ---------------------- #
 
@@ -332,20 +331,16 @@ INDEX_HTML = """
         const fileType = fileInput.files[0].type;
         const isImage = fileType.startsWith('image/');
         
-        // Different timing for images (Gemini) vs PDF (Local ML)
-        // Images take longer due to network API call
         const totalDuration = isImage ? 12000 : 5000; 
         const intervalTime = 100;
         const step = 100 / (totalDuration / intervalTime);
 
         const interval = setInterval(() => {
             if (width >= 95) {
-                // Stall at 95% until response returns
                 clearInterval(interval);
                 progressStage.textContent = "Finalizing Summary...";
             } else {
                 width += step;
-                // Add some randomness to make it look "organic"
                 if(Math.random() > 0.5) width += 0.5;
                 
                 progressBar.style.width = width + '%';
@@ -430,7 +425,7 @@ RESULT_HTML = """
                  </span>
                  {% else %}
                  <span class="px-2 py-1 rounded-md bg-blue-50 text-blue-700 text-[0.65rem] font-bold uppercase tracking-wide border border-blue-100">
-                    ML (TF-IDF)
+                    ML (TF-IDF + TextRank)
                  </span>
                  {% endif %}
               </div>
@@ -539,7 +534,6 @@ RESULT_HTML = """
   </main>
 
   <script>
-    // Simple Chat Logic
     const panel = document.getElementById('chat-panel');
     const input = document.getElementById('chat-input');
     const sendBtn = document.getElementById('chat-send');
@@ -569,8 +563,6 @@ RESULT_HTML = """
         addMsg('user', txt);
         input.value = '';
         
-        // Show typing indicator logic could go here
-        
         try {
             const res = await fetch('{{ url_for("chat") }}', {
                 method: 'POST',
@@ -592,185 +584,293 @@ RESULT_HTML = """
 </html>
 """
 
-# ---------------------- TEXT UTILITIES (EXISTING) ---------------------- #
+# ---------------------- TEXT UTILITIES & ML CORE ---------------------- #
 
 def normalize_whitespace(text: str) -> str:
+    # Basic cleaning
     text = text.replace("\r", " ").replace("\xa0", " ")
-    text = re.sub(r"\s+", " ", text)
+    # Remove excessive PDF headers/footers style artifacts
+    text = re.sub(r'Page \d+ of \d+', '', text)
+    text = re.sub(r'\s+', " ", text)
     return text.strip()
 
 def strip_leading_numbering(s: str) -> str:
     return re.sub(r"^\s*\d+(\.\d+)*\s*[:\-\)]?\s*", "", s).strip()
 
-def is_toc_like(s: str) -> bool:
-    s_lower = s.lower()
-    digits = sum(c.isdigit() for c in s)
-    if digits >= 10 and len(s) > 80 and not re.search(r"\b(reduce|increase|improve|achieve)\b", s_lower):
-        return True
-    if re.search(r"\bcontents\b", s_lower):
-        return True
-    return False
-
 def sentence_split(text: str) -> List[str]:
+    """
+    Improved Sentence Splitter:
+    Handles abbreviations (Dr., Mr., Fig., etc.) to avoid false splits.
+    """
     text = re.sub(r"\n+", " ", text)
-    bulleted = re.split(r"\s+[•o]\s+", text)
+    
+    # Pre-mask abbreviations to prevent splitting
+    abbreviations = {
+        "Dr.": "Dr<DOT>", "Mr.": "Mr<DOT>", "Ms.": "Ms<DOT>", "Mrs.": "Mrs<DOT>",
+        "Fig.": "Fig<DOT>", "No.": "No<DOT>", "Vol.": "Vol<DOT>", "approx.": "approx<DOT>",
+        "vs.": "vs<DOT>", "e.g.": "e<DOT>g<DOT>", "i.e.": "i<DOT>e<DOT>"
+    }
+    for abb, mask in abbreviations.items():
+        text = text.replace(abb, mask)
+
+    # Split by standard sentence terminators
+    # Logic: . ! ? followed by whitespace and a capital letter or quote
+    parts = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s+(?=[A-Z"\'“])', text)
+    
     sentences = []
-    for chunk in bulleted:
-        parts = re.split(r"(?<=[\.\?\!])\s+(?=[A-Z0-9“'\"-])", chunk)
-        for p in parts:
-            p = p.strip()
-            if not p: continue
-            p = re.sub(r"^[\-\–\•\*]+\s*", "", p)
-            p = strip_leading_numbering(p)
-            if len(p) < 20 or is_toc_like(p): continue
-            sentences.append(p)
+    for p in parts:
+        # Unmask abbreviations
+        for abb, mask in abbreviations.items():
+            p = p.replace(mask, abb)
+            
+        p = p.strip()
+        p = re.sub(r"^[\-\–\•\*]+\s*", "", p) # Remove bullet start
+        p = strip_leading_numbering(p)
+        
+        # Filter junk
+        if len(p) < 15: continue # Too short
+        if re.match(r'^[0-9\.]+$', p): continue # Just numbers
+        
+        sentences.append(p)
+        
     return sentences
 
 def extract_text_from_pdf_bytes(raw: bytes) -> str:
     reader = PdfReader(io.BytesIO(raw))
     pages = []
     for pg in reader.pages:
-        pages.append(pg.extract_text() or "")
+        txt = pg.extract_text()
+        if txt:
+            pages.append(txt)
     return "\n".join(pages)
 
-def extract_sections(raw_text: str) -> List[Tuple[str, str]]:
-    lines = raw_text.splitlines()
-    sections: List[Tuple[str, str]] = []
-    current_title = "Front"
-    buffer: List[str] = []
-    heading_re = re.compile(r"^\s*\d+(\.\d+)*\s+[A-Za-z].{0,120}$")
-    short_upper_re = re.compile(r"^[A-Z][A-Z\s\-]{4,}$")
+# ---------------------- ADVANCED CATEGORIZATION ---------------------- #
 
-    for ln in lines:
-        s = ln.strip()
-        if not s:
-            buffer.append("")
-            continue
-        if heading_re.match(s) or (short_upper_re.match(s) and len(s.split()) < 12):
-            if buffer:
-                sections.append((current_title, " ".join(buffer).strip()))
-            current_title = strip_leading_numbering(s)[:120]
-            buffer = []
-        else:
-            buffer.append(s)
-    if buffer:
-        sections.append((current_title, " ".join(buffer).strip()))
-    return [(t, normalize_whitespace(b)) for t, b in sections if b.strip()]
+# Expanded Dictionary for Higher Accuracy
+POLICY_KEYWORDS = {
+    "key goals": [
+        "aim", "goal", "objective", "target", "achieve", "reduce", "increase", 
+        "coverage", "mortality", "rate", "%", "2025", "2030", "vision", "mission", 
+        "outcome", "expectancy", "eliminate"
+    ],
+    "policy principles": [
+        "principle", "equity", "universal", "right", "access", "accountability", 
+        "transparency", "inclusive", "patient-centered", "quality", "ethics", 
+        "value", "integrity", "holistic"
+    ],
+    "service delivery": [
+        "hospital", "primary care", "secondary care", "tertiary", "referral", 
+        "clinic", "health center", "wellness", "ambulance", "emergency", "drug", 
+        "diagnostic", "infrastructure", "bed", "supply chain", "logistics"
+    ],
+    "prevention & promotion": [
+        "prevent", "sanitation", "nutrition", "immunization", "vaccine", "tobacco", 
+        "alcohol", "hygiene", "awareness", "lifestyle", "pollution", "water", 
+        "screening", "diet", "exercise", "community"
+    ],
+    "human resources": [
+        "doctor", "nurse", "staff", "training", "workforce", "recruit", "medical college", 
+        "paramedic", "salary", "incentive", "capacity building", "skill", "hrh", 
+        "deployment", "specialist"
+    ],
+    "financing & private sector": [
+        "fund", "budget", "finance", "expenditure", "cost", "insurance", "private", 
+        "partnership", "ppp", "out-of-pocket", "reimbursement", "allocation", 
+        "spending", "gdp", "tax", "claim"
+    ],
+    "digital health": [
+        "digital", "technology", "data", "record", "ehr", "emr", "telemedicine", 
+        "mobile", "app", "information system", "cyber", "interoperability", 
+        "portal", "online", "software", "ai"
+    ],
+    "ayush integration": [
+        "ayush", "ayurveda", "yoga", "unani", "siddha", "homeopathy", "traditional", 
+        "naturopathy", "alternative medicine", "integrative"
+    ],
+    "implementation": [
+        "implement", "strategy", "roadmap", "monitor", "evaluate", "audit", 
+        "committee", "governance", "framework", "action plan", "timeline", 
+        "supervision", "compliance", "regulation", "step", "phase"
+    ]
+}
 
-def detect_title(raw_text: str) -> str:
-    for line in raw_text.splitlines():
-        s = line.strip()
-        if len(s) < 5: continue
-        if "content" in s.lower(): break
-        return s
-    return "Policy Document"
+def score_sentence_categories(sentence: str) -> str:
+    """
+    Scores a sentence against all categories based on keyword density.
+    Returns the category with the highest score.
+    """
+    s_lower = sentence.lower()
+    scores = {cat: 0 for cat in POLICY_KEYWORDS}
+    
+    # Tokenize simply
+    words = re.findall(r'\w+', s_lower)
+    
+    for cat, keywords in POLICY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in s_lower:
+                # Exact match bonus
+                scores[cat] += 2
+            
+    # Boost Implementation if it starts with a verb implies action
+    if re.match(r'^(establish|create|develop|ensure|provide)', s_lower):
+        scores['implementation'] += 1
 
-# ---------------------- ML HELPERS (EXISTING) ---------------------- #
-# ... (Reusing your specific categorization and ML logic here) ...
-# I am condensing these specifically to fit the response limit, 
-# assuming they are the same as your provided code.
-# The actual logic changes are in the route handlers.
+    # Boost Goals if it has numbers/percentages
+    if '%' in s_lower or re.search(r'\b20[2-5][0-9]\b', s_lower):
+        scores['key goals'] += 2
 
-GOAL_METRIC_WORDS = ["life expectancy", "mortality", "imr", "u5mr", "mmr", "coverage", "%", "rate"]
-GOAL_VERBS = ["reduce", "increase", "improve", "achieve", "eliminate", "decrease"]
+    # Get Max Score
+    best_cat = max(scores, key=scores.get)
+    
+    # Threshold: If the best score is 0, it's "Other"
+    if scores[best_cat] == 0:
+        return "other"
+    
+    return best_cat
 
-def is_goal_sentence(s: str) -> bool:
-    s_lower = s.lower()
-    return any(ch.isdigit() for ch in s_lower) and \
-           any(w in s_lower for w in GOAL_METRIC_WORDS) and \
-           any(v in s_lower for v in GOAL_VERBS)
-
-def categorize_sentence(s: str) -> str:
-    s_lower = s.lower()
-    if is_goal_sentence(s): return "key goals"
-    if any(w in s_lower for w in ["principle", "equity", "universal"]): return "policy principles"
-    if any(w in s_lower for w in ["primary care", "hospital", "service"]): return "service delivery"
-    if any(w in s_lower for w in ["prevention", "sanitation", "nutrition"]): return "prevention & promotion"
-    if any(w in s_lower for w in ["human resources", "doctor", "nurse", "training"]): return "human resources"
-    if any(w in s_lower for w in ["financing", "insurance", "expenditure"]): return "financing & private sector"
-    if any(w in s_lower for w in ["digital", "data", "telemedicine"]): return "digital health"
-    if any(w in s_lower for w in ["ayush", "yoga"]): return "ayush integration"
-    if any(w in s_lower for w in ["implementation", "roadmap", "strategy"]): return "implementation"
-    return "other"
+# ---------------------- ML SUMMARIZER (TextRank + MMR) ---------------------- #
 
 def build_tfidf(sentences: List[str]):
-    return TfidfVectorizer(stop_words="english", ngram_range=(1, 2), max_df=0.9, min_df=1).fit_transform(sentences)
+    # Sublinear TF scales counts to logarithmic (helps with varying sentence lengths)
+    return TfidfVectorizer(
+        stop_words="english", 
+        ngram_range=(1, 2), 
+        sublinear_tf=True
+    ).fit_transform(sentences)
 
-def textrank_scores(sim_mat: np.ndarray, positional_boost: np.ndarray = None) -> Dict[int, float]:
+def textrank_scores(sim_mat: np.ndarray, doc_len: int) -> Dict[int, float]:
+    """
+    Calculates TextRank scores with Position Bias.
+    Sentences at the very beginning and very end of a doc get a slight boost.
+    """
     np.fill_diagonal(sim_mat, 0.0)
     G = nx.from_numpy_array(sim_mat)
     try:
-        pr = nx.pagerank(G, max_iter=200, tol=1e-6)
+        pr = nx.pagerank(G, alpha=0.85, max_iter=100, tol=1e-4)
     except:
+        # Fallback for disconnected graphs
         pr = {i: 0.0 for i in range(sim_mat.shape[0])}
-    scores = np.array([pr.get(i, 0.0) for i in range(sim_mat.shape[0])], dtype=float)
-    if positional_boost is not None: scores = scores * (1.0 + positional_boost)
-    return {i: float(scores[i]) for i in range(len(scores))}
+    
+    scores = {}
+    for i in range(sim_mat.shape[0]):
+        base_score = pr.get(i, 0.0)
+        
+        # Position Bias Multiplier
+        mult = 1.0
+        if i < doc_len * 0.1: mult = 1.2 # Intro boost
+        elif i > doc_len * 0.9: mult = 1.1 # Conclusion boost
+        
+        scores[i] = base_score * mult
+        
+    return scores
 
-def mmr(scores_dict: Dict[int, float], sim_mat: np.ndarray, k: int, lambda_param: float = 0.7) -> List[int]:
+def mmr(scores_dict: Dict[int, float], sim_mat: np.ndarray, k: int, lambda_param: float = 0.6) -> List[int]:
+    """
+    Maximal Marginal Relevance to reduce redundancy.
+    Lower lambda = more diversity.
+    """
     indices = list(range(sim_mat.shape[0]))
     scores = np.array([scores_dict.get(i, 0.0) for i in indices])
-    if scores.max() > 0: scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
+    
+    if scores.max() > 0: 
+        scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
+        
     selected = []
     candidates = set(indices)
+    
     while len(selected) < k and candidates:
-        best, best_score = None, -1e9
+        best_idx = None
+        best_mmr = -1e9
+        
         for i in list(candidates):
-            div = max([sim_mat[i][j] for j in selected]) if selected else 0.0
-            s = lambda_param * scores[i] - (1 - lambda_param) * div
-            if s > best_score: best_score, best = s, i
-        if best is None: break
-        selected.append(best)
-        candidates.remove(best)
+            # Similarity to already selected
+            sim_to_selected = 0.0
+            if selected:
+                sim_to_selected = max([sim_mat[i][j] for j in selected])
+            
+            # MMR Formula
+            curr_mmr = (lambda_param * scores[i]) - ((1 - lambda_param) * sim_to_selected)
+            
+            if curr_mmr > best_mmr:
+                best_mmr = curr_mmr
+                best_idx = i
+                
+        if best_idx is not None:
+            selected.append(best_idx)
+            candidates.remove(best_idx)
+        else:
+            break
+            
     return selected
 
 def summarize_extractive(raw_text: str, length_choice: str = "medium"):
-    # (Existing logic maintained)
+    # 1. Cleaning
     cleaned = normalize_whitespace(raw_text)
-    sections = extract_sections(cleaned)
-    sentences, sent_to_section = [], []
-    for si, (_, body) in enumerate(sections):
-        for s in sentence_split(body):
-            sentences.append(s); sent_to_section.append(si)
     
-    if not sentences: sentences = sentence_split(cleaned)
+    # 2. Splitting
+    sentences = sentence_split(cleaned)
     n = len(sentences)
-    if n <= 3: return sentences, {} # trivial case
-
-    ratio = 0.10 if length_choice == "short" else (0.30 if length_choice == "long" else 0.20)
-    target = min(max(1, int(round(n * ratio))), 20, n)
     
-    tfidf = build_tfidf(sentences)
-    sim = cosine_similarity(tfidf)
-    tr_scores = textrank_scores(sim) # simplified for brevity, full logic in your code works fine
-    selected_idxs = mmr(tr_scores, sim, target)
+    if n <= 5: return sentences, {} # Too short to summarize
+
+    # 3. Target Length
+    ratio = 0.15 if length_choice == "short" else (0.40 if length_choice == "long" else 0.25)
+    target_k = min(max(5, int(n * ratio)), 40) # Min 5 sentences, Max 40
+    
+    # 4. Vectorization & Similarity
+    tfidf_mat = build_tfidf(sentences)
+    sim_mat = cosine_similarity(tfidf_mat)
+    
+    # 5. Ranking
+    tr_scores = textrank_scores(sim_mat, n)
+    
+    # 6. Selection (MMR)
+    selected_idxs = mmr(tr_scores, sim_mat, target_k)
     selected_idxs.sort()
     
-    return [sentences[i] for i in selected_idxs], {}
+    final_sents = [sentences[i] for i in selected_idxs]
+    return final_sents, {}
 
 def build_structured_summary(summary_sentences: List[str], tone: str):
-    # Map sentences to categories manually
+    # Map sentences to categories using weighted scoring
     cat_map = defaultdict(list)
     for s in summary_sentences:
-        cat_map[categorize_sentence(s)].append(s)
+        category = score_sentence_categories(s)
+        cat_map[category].append(s)
     
     section_titles = {
-        "key goals": "Key Goals", "policy principles": "Policy Principles",
-        "service delivery": "Healthcare Delivery", "prevention & promotion": "Prevention",
-        "human resources": "HR & Training", "financing & private sector": "Financing",
-        "digital health": "Digital Health", "ayush integration": "AYUSH",
-        "implementation": "Implementation", "other": "Key Points"
+        "key goals": "Key Goals & Targets", 
+        "policy principles": "Policy Principles & Vision",
+        "service delivery": "Healthcare Delivery Systems", 
+        "prevention & promotion": "Prevention & Wellness",
+        "human resources": "Workforce (HR)", 
+        "financing & private sector": "Financing & Costs",
+        "digital health": "Digital Interventions", 
+        "ayush integration": "AYUSH / Traditional Medicine",
+        "implementation": "Implementation Strategy", 
+        "other": "Other Key Observations"
     }
     
     sections = []
+    
+    # Helper to clean text
+    def clean_bullet(txt):
+        if tone == "easy":
+            # Very basic simplification (removing jargon parens)
+            txt = re.sub(r'\([^)]*\)', '', txt)
+        return txt.strip()
+
     for k, title in section_titles.items():
         if cat_map[k]:
-            # Deduplicate
-            unique = list(dict.fromkeys(cat_map[k]))
+            unique = list(dict.fromkeys([clean_bullet(s) for s in cat_map[k]]))
             sections.append({"title": title, "bullets": unique})
             
-    abstract = " ".join(summary_sentences[:3])
-    impl_points = cat_map.get("implementation", [])
+    # Abstract: Take the highest ranked sentences that were classified as 'goals' or 'principles' first
+    # If not enough, take from the start of the summary
+    abstract_candidates = cat_map['key goals'] + cat_map['policy principles'] + summary_sentences
+    abstract = " ".join(list(dict.fromkeys(abstract_candidates))[:3])
+    
+    impl_points = [clean_bullet(s) for s in cat_map.get("implementation", [])]
     
     return {
         "abstract": abstract,
@@ -782,46 +882,36 @@ def build_structured_summary(summary_sentences: List[str], tone: str):
 # ---------------------- GEMINI IMAGE PROCESSING ---------------------- #
 
 def process_image_with_gemini(image_path: str):
-    """
-    Uses Gemini to extract text AND summarize structured data from an image.
-    This replaces Tesseract + ML for image inputs.
-    """
     if not GEMINI_API_KEY:
         return None, "Gemini API Key missing."
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash") # 1.5 Flash is efficient for vision
-        
-        # Load image
+        model = genai.GenerativeModel("gemini-2.5-flash")
         img = Image.open(image_path)
         
         prompt = """
         Analyze this image of a policy document. 
         Perform two tasks:
-        1. Extract the main text content (for context).
+        1. Extract the main text content.
         2. Create a structured summary.
         
-        Output strictly valid JSON with this structure:
+        Output strictly valid JSON:
         {
-            "extracted_text": "The full raw text visible in the image...",
+            "extracted_text": "...",
             "summary_structure": {
-                "abstract": "A concise 3-sentence summary of the document.",
+                "abstract": "...",
                 "sections": [
-                    { "title": "Key Goals", "bullets": ["goal 1", "goal 2"] },
-                    { "title": "Service Delivery", "bullets": ["point 1", "point 2"] },
-                    { "title": "Financing", "bullets": ["point 1"] },
-                    { "title": "Implementation", "bullets": ["step 1", "step 2"] }
+                    { "title": "Key Goals", "bullets": ["..."] },
+                    { "title": "Financing", "bullets": ["..."] },
+                    { "title": "Implementation", "bullets": ["..."] }
                 ],
-                "implementation_points": ["Specific action item 1", "Specific action item 2"]
+                "implementation_points": ["..."]
             }
         }
-        Do not use markdown code blocks. Just return the JSON string.
         """
-        
         response = model.generate_content([prompt, img])
         text_resp = response.text.strip()
         
-        # Clean markdown if present
         if text_resp.startswith("```json"):
             text_resp = text_resp.replace("```json", "").replace("```", "")
         
@@ -848,10 +938,11 @@ def save_summary_pdf(title: str, abstract: str, sections: List[Dict], out_path: 
     y -= 15
     
     c.setFont("Helvetica", 10)
-    lines = simpleSplit(abstract, "Helvetica", 10, width - 2*margin)
-    for line in lines:
-        c.drawString(margin, y, line)
-        y -= 12
+    if abstract:
+        lines = simpleSplit(abstract, "Helvetica", 10, width - 2*margin)
+        for line in lines:
+            c.drawString(margin, y, line)
+            y -= 12
     y -= 10
     
     for sec in sections:
@@ -919,35 +1010,27 @@ def summarize():
     
     lower_name = filename.lower()
     
-    # OUTPUT VARIABLES
     structured_data = {}
     orig_text = ""
     orig_type = "unknown"
-    used_model = "ml" # 'ml' or 'gemini'
+    used_model = "ml" 
     
-    # ---------------- LOGIC SPLIT ---------------- #
-    
-    # CASE 1: IMAGE -> USE GEMINI
+    # CASE 1: IMAGE -> GEMINI
     if lower_name.endswith(('.png', '.jpg', '.jpeg', '.webp')):
         orig_type = "image"
         used_model = "gemini"
-        
         gemini_data, err = process_image_with_gemini(stored_path)
         if err or not gemini_data:
-            # Fallback to Tesseract if Gemini fails? 
-            # Request said "ONLY WHEN IMAGE UPLOADED use gemini". 
-            # If fail, we abort or try fallback. Let's abort for clarity.
             abort(500, f"Gemini Image Processing Failed: {err}")
-            
         orig_text = gemini_data.get("extracted_text", "")
         structured_data = gemini_data.get("summary_structure", {})
         
-        # Ensure extraction has defaults
+        # Defaults
         if "abstract" not in structured_data: structured_data["abstract"] = "Summary not generated."
         if "sections" not in structured_data: structured_data["sections"] = []
         if "implementation_points" not in structured_data: structured_data["implementation_points"] = []
 
-    # CASE 2: PDF/TXT -> USE ML (Original Logic)
+    # CASE 2: PDF/TXT -> IMPROVED ML
     else:
         used_model = "ml"
         with open(stored_path, "rb") as f_in:
@@ -969,9 +1052,7 @@ def summarize():
         sents, _ = summarize_extractive(orig_text, length)
         structured_data = build_structured_summary(sents, tone)
 
-    # ---------------- COMMON OUTPUT ---------------- #
-    
-    # Generate PDF of the summary
+    # Generate PDF
     summary_filename = f"{uid}_summary.pdf"
     summary_path = os.path.join(app.config["SUMMARY_FOLDER"], summary_filename)
     save_summary_pdf(
@@ -986,7 +1067,7 @@ def summarize():
         title="Med.AI Summary",
         orig_type=orig_type,
         orig_url=url_for("uploaded_file", filename=stored_name),
-        orig_text=orig_text[:20000], # Limit context for chat
+        orig_text=orig_text[:20000], 
         doc_context=orig_text[:20000],
         abstract=structured_data.get("abstract", ""),
         sections=structured_data.get("sections", []),
