@@ -156,7 +156,7 @@ INDEX_HTML = """
         </h1>
         <p class="text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
           Upload PDF, Text, or <span class="font-semibold text-slate-800">Use Your Camera</span>. 
-          We use advanced ML for documents and Gemini AI for images to generate structured, actionable summaries.
+          We use Unsupervised ML (TF-IDF + TextRank + MMR) for documents to generate structured, actionable summaries.
         </p>
       </div>
 
@@ -349,7 +349,7 @@ INDEX_HTML = """
                 if (width < 30) {
                     progressStage.textContent = "Uploading Document...";
                 } else if (width < 70) {
-                    progressStage.textContent = isImage ? "Gemini AI Extracting Text..." : "Running ML Algorithms...";
+                    progressStage.textContent = "Running ML Algorithms...";
                 } else {
                     progressStage.textContent = "Structuring Policy Points...";
                 }
