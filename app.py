@@ -421,7 +421,7 @@ RESULT_HTML = """
                   </span>
                   {% if used_model == 'gemini' %}
                   <span class="px-2 py-1 rounded-md bg-violet-50 text-violet-700 text-[0.65rem] font-bold uppercase tracking-wide border border-violet-100">
-                    <i class="fa-solid fa-sparkles mr-1"></i> Gemini AI
+                    <i class="fa-solid fa-sparkles mr-1"></i> ML (TF-IDF + TextRank)
                   </span>
                   {% else %}
                   <span class="px-2 py-1 rounded-md bg-blue-50 text-blue-700 text-[0.65rem] font-bold uppercase tracking-wide border border-blue-100">
