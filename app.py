@@ -24,8 +24,7 @@ from PyPDF2 import PdfReader
 from werkzeug.utils import secure_filename
 
 from PIL import Image
-import pytesseract
-
+# import pytesseract # Uncomment if using OCR locally
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
@@ -56,180 +55,189 @@ if GEMINI_API_KEY:
 
 # ---------------------- HTML TEMPLATES ---------------------- #
 
-INDEX_HTML = """
+# Replicating the design from index.html/about.html
+COMMON_HEAD = """
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "background-light": "#FFFFFF",
+                        "background-dark": "#0D0D0F",
+                        "surface-dark": "#161b22",
+                        "afzal-purple": "#8C4FFF",
+                        "afzal-blue": "#4D9CFF",
+                        "afzal-red": "#FF5757",
+                        "text-light": "#1F2937",
+                        "text-dark": "#F3F4F6",
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    backgroundImage: {
+                        'grid-pattern-dark': "linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px)",
+                        'radial-glow': "radial-gradient(circle at center, rgba(140, 79, 255, 0.15) 0%, transparent 70%)",
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse-opacity 4s ease-in-out infinite',
+                        'float': 'float 6s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        'pulse-opacity': {
+                            '0%, 100%': { opacity: 0.2, transform: 'scale(1)' },
+                            '50%': { opacity: 0.5, transform: 'scale(1.1)' },
+                        },
+                        'float': {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
+                    }
+                },
+            },
+        };
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0D0D0F; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+        body { background-color: #0D0D0F; color: #F3F4F6; }
+        .glass-panel {
+            background: rgba(22, 27, 34, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .gradient-text {
+            background: linear-gradient(to right, #8C4FFF, #4D9CFF);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+"""
+
+INDEX_HTML = f"""
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
-  <title>Med | Policy Brief Summarizer</title>
+  <title>Med.AI | Workspace</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-          colors: {
-            teal: { 50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4', 400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e', 800: '#115e59', 900: '#134e4a' },
-          },
-          animation: {
-            'float': 'float 6s ease-in-out infinite',
-            'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-          },
-          keyframes: {
-            float: {
-              '0%, 100%': { transform: 'translateY(0)' },
-              '50%': { transform: 'translateY(-10px)' },
-            }
-          }
-        }
-      }
-    }
-  </script>
-  <style>
-    body { background-color: #f8fafc; }
-    .glass-panel {
-      background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.5);
-    }
-    .gradient-text {
-      background: linear-gradient(135deg, #0f766e 0%, #0891b2 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    /* Progress Bar Animation */
-    @keyframes progress-stripes {
-      from { background-position: 1rem 0; }
-      to { background-position: 0 0; }
-    }
-    .animate-stripes {
-      background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
-      background-size: 1rem 1rem;
-      animation: progress-stripes 1s linear infinite;
-    }
-  </style>
+  {COMMON_HEAD}
 </head>
-<body class="text-slate-800 relative overflow-x-hidden min-h-screen flex flex-col">
+<body class="font-sans antialiased text-gray-300 bg-background-dark overflow-x-hidden selection:bg-afzal-purple selection:text-white">
 
-  <div class="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-teal-200/30 rounded-full blur-3xl -z-10 animate-pulse-slow"></div>
-  <div class="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-200/30 rounded-full blur-3xl -z-10 animate-pulse-slow"></div>
+  <div class="fixed inset-0 bg-grid-pattern-dark bg-[size:50px_50px] opacity-20 pointer-events-none"></div>
+  <div class="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-afzal-purple/20 rounded-full blur-3xl -z-10 animate-pulse-slow"></div>
+  <div class="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-afzal-blue/20 rounded-full blur-3xl -z-10 animate-pulse-slow"></div>
 
-  <nav class="fixed w-full z-40 glass-panel border-b border-slate-200/50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex justify-between h-16 items-center">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-gradient-to-tr from-teal-600 to-cyan-600 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/20 text-white">
-            <i class="fa-solid fa-staff-snake text-xl"></i>
-          </div>
-          <span class="font-extrabold text-2xl tracking-tight text-slate-800">
-            Med<span class="text-teal-600">.AI</span>
-          </span>
+  <nav class="border-b border-gray-800 sticky top-0 z-50 bg-background-dark/80 backdrop-blur-md h-16">
+    <div class="w-full h-full max-w-7xl mx-auto px-6">
+        <div class="flex items-center justify-between h-full">
+            <a href="/" class="flex items-center space-x-2.5">
+                <div class="w-8 h-8 bg-white rounded-full flex items-center justify-center">
+                    <i class="fa-solid fa-staff-snake text-black text-lg"></i>
+                </div>
+                <span class="font-bold text-2xl tracking-tight text-white">Med.AI</span>
+            </a>
+            <div class="hidden md:flex items-center gap-1">
+                 <span class="text-xs font-mono text-afzal-purple bg-afzal-purple/10 border border-afzal-purple/20 px-2 py-1 rounded">v2.5.0-beta</span>
+            </div>
         </div>
-        <div class="hidden md:flex items-center gap-6 text-xs font-bold uppercase tracking-wider text-slate-500">
-          <span>AI Powered Summarizer</span>
-          <a href="#workspace" class="px-5 py-2.5 rounded-full bg-slate-900 text-white hover:bg-slate-800 transition shadow-lg shadow-slate-900/20">
-            Start Now
-          </a>
-        </div>
-      </div>
     </div>
   </nav>
 
-  <main class="flex-grow pt-32 pb-20 px-4">
-    <div class="max-w-5xl mx-auto">
+  <main class="relative z-10 pt-16 pb-20 px-4">
+    <div class="max-w-4xl mx-auto">
        
-      <div class="text-center space-y-6 mb-16">
-        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-teal-50 border border-teal-100 text-teal-700 text-xs font-bold uppercase tracking-wide animate-float">
-          <span class="w-2 h-2 rounded-full bg-teal-500 animate-pulse"></span>
-          Primary Healthcare Policy Analysis
+      <div class="text-center space-y-6 mb-12">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-dark border border-gray-700 text-gray-400 text-xs font-mono uppercase tracking-wide animate-float">
+          <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+          System Operational
         </div>
-        <h1 class="text-5xl md:text-6xl font-extrabold text-slate-900 leading-tight">
-          Simplify Complex <br>
-          <span class="gradient-text">Medical Policies</span>
+        <h1 class="text-5xl md:text-6xl font-light text-white leading-tight">
+          Summarize Policy<br>
+          <span class="gradient-text font-semibold">in Seconds.</span>
         </h1>
-        <p class="text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
-          Upload PDF, Text, or <span class="font-semibold text-slate-800">Use Your Camera</span>. 
-          We use Unsupervised ML (TF-IDF + TextRank) for documents to generate structured, actionable summaries.
+        <p class="text-lg text-gray-400 max-w-xl mx-auto font-light">
+          Upload PDF, Text, or Images. Our hybrid ML engine extracts key entities and generates structured, actionable insights.
         </p>
       </div>
 
-      <div id="workspace" class="glass-panel rounded-3xl p-1 shadow-2xl shadow-slate-200/50 max-w-3xl mx-auto">
-        <div class="bg-white/50 rounded-[1.3rem] p-6 md:p-10 border border-white/50">
+      <div id="workspace" class="bg-surface-dark border border-gray-800 rounded-xl p-1 shadow-2xl relative overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-afzal-purple via-afzal-blue to-afzal-purple opacity-50"></div>
+        
+        <div class="bg-background-dark/50 rounded-[0.7rem] p-6 md:p-10">
            
-          <form id="uploadForm" action="{{ url_for('summarize') }}" method="post" enctype="multipart/form-data" class="space-y-8">
+          <form id="uploadForm" action="{{{{ url_for('summarize') }}}}" method="post" enctype="multipart/form-data" class="space-y-8">
             
-            <div class="group relative w-full h-64 border-3 border-dashed border-slate-300 rounded-2xl bg-slate-50/50 hover:bg-teal-50/30 hover:border-teal-400 transition-all duration-300 flex flex-col items-center justify-center cursor-pointer overflow-hidden" id="drop-zone">
+            <div class="group relative w-full h-64 border-2 border-dashed border-gray-700 rounded-lg bg-surface-dark/50 hover:bg-surface-dark hover:border-afzal-purple transition-all duration-300 flex flex-col items-center justify-center cursor-pointer overflow-hidden" id="drop-zone">
                
               <input id="file-input" type="file" name="file" accept=".pdf,.txt,image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20">
                
-              <div id="upload-prompt" class="text-center space-y-4 transition-all duration-300 group-hover:scale-105">
-                <div class="w-16 h-16 bg-white rounded-full shadow-md flex items-center justify-center mx-auto text-teal-500 text-2xl group-hover:text-teal-600">
+              <div id="upload-prompt" class="text-center space-y-4 transition-all duration-300 group-hover:scale-105 pointer-events-none">
+                <div class="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto text-gray-400 text-2xl group-hover:text-afzal-purple group-hover:bg-gray-700 transition-colors">
                   <i class="fa-solid fa-cloud-arrow-up"></i>
                 </div>
                 <div>
-                  <p class="text-lg font-bold text-slate-700">Click to upload or Drag & Drop</p>
-                  <p class="text-sm text-slate-500 mt-1">PDF, TXT, or Image (JPG, PNG)</p>
-                </div>
-                <div class="inline-flex items-center gap-2 px-4 py-2 bg-white rounded-full shadow-sm text-xs font-bold text-slate-600 uppercase tracking-wide border border-slate-200">
-                  <i class="fa-solid fa-camera"></i> Mobile Camera Ready
+                  <p class="text-lg font-medium text-gray-300">Click to upload or Drag & Drop</p>
+                  <p class="text-sm text-gray-500 mt-1 font-mono">PDF, TXT, JPG, PNG</p>
                 </div>
               </div>
 
-              <div id="file-preview" class="hidden absolute inset-0 bg-white/90 backdrop-blur-sm z-10 flex flex-col items-center justify-center p-6 text-center animate-fade-in">
-                  <div id="preview-icon" class="mb-4 text-4xl text-teal-600"></div>
-                  <div id="preview-image-container" class="mb-4 hidden rounded-lg overflow-hidden shadow-lg border border-slate-200 max-h-32">
+              <div id="file-preview" class="hidden absolute inset-0 bg-background-dark z-10 flex flex-col items-center justify-center p-6 text-center">
+                  <div id="preview-icon" class="mb-4 text-4xl text-afzal-purple"></div>
+                  <div id="preview-image-container" class="mb-4 hidden rounded overflow-hidden border border-gray-700 max-h-32">
                      <img id="preview-image" src="" alt="Preview" class="h-full object-contain">
                   </div>
-                  <p id="filename-display" class="font-bold text-slate-800 text-lg break-all max-w-md"></p>
-                  <p class="text-xs text-teal-600 font-semibold mt-2 uppercase tracking-wider">Ready to Summarize</p>
-                  <button type="button" id="change-file-btn" class="mt-4 text-xs text-slate-400 hover:text-slate-600 underline z-30 relative">Change file</button>
+                  <p id="filename-display" class="font-mono text-white text-sm break-all max-w-md bg-surface-dark px-3 py-1 rounded border border-gray-700"></p>
+                  <button type="button" id="change-file-btn" class="mt-4 text-xs text-gray-500 hover:text-white underline z-30 relative">Change file</button>
               </div>
 
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Summary Length</label>
-                <div class="flex bg-slate-100 rounded-lg p-1">
+              
+              <div class="bg-surface-dark rounded-lg p-4 border border-gray-800">
+                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Output Length</label>
+                <div class="flex bg-background-dark rounded p-1 border border-gray-700">
                   <label class="flex-1 text-center cursor-pointer">
                     <input type="radio" name="length" value="short" class="peer hidden">
-                    <span class="block py-2 text-xs font-bold text-slate-500 rounded-md peer-checked:bg-white peer-checked:text-teal-700 peer-checked:shadow-sm transition">Short</span>
+                    <span class="block py-2 text-xs font-medium text-gray-400 rounded hover:text-white peer-checked:bg-gray-700 peer-checked:text-white transition">Short</span>
                   </label>
                   <label class="flex-1 text-center cursor-pointer">
                     <input type="radio" name="length" value="medium" checked class="peer hidden">
-                    <span class="block py-2 text-xs font-bold text-slate-500 rounded-md peer-checked:bg-white peer-checked:text-teal-700 peer-checked:shadow-sm transition">Medium</span>
+                    <span class="block py-2 text-xs font-medium text-gray-400 rounded hover:text-white peer-checked:bg-gray-700 peer-checked:text-white transition">Medium</span>
                   </label>
                   <label class="flex-1 text-center cursor-pointer">
                     <input type="radio" name="length" value="long" class="peer hidden">
-                    <span class="block py-2 text-xs font-bold text-slate-500 rounded-md peer-checked:bg-white peer-checked:text-teal-700 peer-checked:shadow-sm transition">Long</span>
+                    <span class="block py-2 text-xs font-medium text-gray-400 rounded hover:text-white peer-checked:bg-gray-700 peer-checked:text-white transition">Long</span>
                   </label>
                 </div>
               </div>
 
-              <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Tone</label>
-                <div class="flex bg-slate-100 rounded-lg p-1">
+              <div class="bg-surface-dark rounded-lg p-4 border border-gray-800">
+                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Analysis Model</label>
+                <div class="flex bg-background-dark rounded p-1 border border-gray-700">
                   <label class="flex-1 text-center cursor-pointer">
                     <input type="radio" name="tone" value="academic" checked class="peer hidden">
-                    <span class="block py-2 text-xs font-bold text-slate-500 rounded-md peer-checked:bg-white peer-checked:text-teal-700 peer-checked:shadow-sm transition">Academic</span>
+                    <span class="block py-2 text-xs font-medium text-gray-400 rounded hover:text-white peer-checked:bg-gray-700 peer-checked:text-white transition">Technical</span>
                   </label>
                   <label class="flex-1 text-center cursor-pointer">
                     <input type="radio" name="tone" value="easy" class="peer hidden">
-                    <span class="block py-2 text-xs font-bold text-slate-500 rounded-md peer-checked:bg-white peer-checked:text-teal-700 peer-checked:shadow-sm transition">Simple</span>
+                    <span class="block py-2 text-xs font-medium text-gray-400 rounded hover:text-white peer-checked:bg-gray-700 peer-checked:text-white transition">Simplified</span>
                   </label>
                 </div>
               </div>
             </div>
 
-            <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-700 text-white font-bold text-lg shadow-lg shadow-teal-500/30 hover:shadow-xl hover:scale-[1.02] transition-all duration-200 flex items-center justify-center gap-2">
-              <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Summary
+            <button type="submit" class="w-full py-4 rounded bg-afzal-purple hover:bg-[#7a3ee3] text-white font-semibold text-sm transition-colors shadow-lg shadow-purple-900/20 flex items-center justify-center gap-2">
+              <i class="fa-solid fa-bolt"></i> Generate Analysis
             </button>
 
           </form>
@@ -239,22 +247,22 @@ INDEX_HTML = """
     </div>
   </main>
 
-  <div id="progress-overlay" class="fixed inset-0 bg-white/95 backdrop-blur-md z-50 hidden flex-col items-center justify-center">
+  <div id="progress-overlay" class="fixed inset-0 bg-background-dark/95 backdrop-blur-md z-50 hidden flex-col items-center justify-center">
     <div class="w-full max-w-md px-6 text-center space-y-6">
        
       <div class="relative w-20 h-20 mx-auto">
-        <div class="absolute inset-0 rounded-full border-4 border-slate-100"></div>
-        <div class="absolute inset-0 rounded-full border-4 border-teal-500 border-t-transparent animate-spin"></div>
-        <div class="absolute inset-0 flex items-center justify-center text-teal-600 font-bold text-xl" id="progress-text">0%</div>
+        <div class="absolute inset-0 rounded-full border-2 border-gray-800"></div>
+        <div class="absolute inset-0 rounded-full border-2 border-afzal-purple border-t-transparent animate-spin"></div>
+        <div class="absolute inset-0 flex items-center justify-center text-white font-mono text-xl" id="progress-text">0%</div>
       </div>
 
       <div class="space-y-2">
-        <h3 class="text-xl font-bold text-slate-900" id="progress-stage">Starting...</h3>
-        <p class="text-sm text-slate-500">Please wait while we analyze your document.</p>
+        <h3 class="text-xl font-light text-white" id="progress-stage">Initializing...</h3>
+        <p class="text-sm text-gray-500 font-mono">Do not close this window.</p>
       </div>
 
-      <div class="w-full h-3 bg-slate-200 rounded-full overflow-hidden relative">
-        <div id="progress-bar" class="h-full bg-gradient-to-r from-teal-400 to-cyan-600 animate-stripes w-0 transition-all duration-300 ease-out"></div>
+      <div class="w-full h-1 bg-gray-800 rounded-full overflow-hidden relative">
+        <div id="progress-bar" class="h-full bg-gradient-to-r from-afzal-purple to-afzal-blue w-0 transition-all duration-300 ease-out"></div>
       </div>
     </div>
   </div>
@@ -274,22 +282,15 @@ INDEX_HTML = """
     const progressText = document.getElementById('progress-text');
     const progressStage = document.getElementById('progress-stage');
 
-    // 1. File Upload Preview Logic
     fileInput.addEventListener('change', function(e) {
       if (this.files && this.files[0]) {
         const file = this.files[0];
         const reader = new FileReader();
 
-        // Show preview container, hide prompt
-        uploadPrompt.classList.add('opacity-0');
-        setTimeout(() => {
-            uploadPrompt.classList.add('hidden');
-            filePreview.classList.remove('hidden');
-        }, 300);
-         
+        uploadPrompt.classList.add('hidden');
+        filePreview.classList.remove('hidden');
+        
         filenameDisplay.textContent = file.name;
-
-        // Reset styling
         previewImgContainer.classList.add('hidden');
         previewIcon.innerHTML = '';
 
@@ -300,23 +301,20 @@ INDEX_HTML = """
            }
            reader.readAsDataURL(file);
         } else if (file.type === 'application/pdf') {
-           previewIcon.innerHTML = '<i class="fa-solid fa-file-pdf text-red-500"></i>';
+           previewIcon.innerHTML = '<i class="fa-regular fa-file-pdf"></i>';
         } else {
-           previewIcon.innerHTML = '<i class="fa-solid fa-file-lines text-slate-500"></i>';
+           previewIcon.innerHTML = '<i class="fa-regular fa-file-lines"></i>';
         }
       }
     });
 
-    // Change file button
     changeBtn.addEventListener('click', (e) => {
-        e.stopPropagation(); // prevent triggering input click again immediately
-        fileInput.value = ''; // clear input
+        e.stopPropagation();
+        fileInput.value = '';
         filePreview.classList.add('hidden');
         uploadPrompt.classList.remove('hidden');
-        uploadPrompt.classList.remove('opacity-0');
     });
 
-    // 2. Real Progress Bar Logic
     uploadForm.addEventListener('submit', function(e) {
         if (!fileInput.files.length) {
             e.preventDefault();
@@ -338,7 +336,7 @@ INDEX_HTML = """
         const interval = setInterval(() => {
             if (width >= 95) {
                 clearInterval(interval);
-                progressStage.textContent = "Finalizing Summary...";
+                progressStage.textContent = "Rendering Output...";
             } else {
                 width += step;
                 if(Math.random() > 0.5) width += 0.5;
@@ -347,11 +345,11 @@ INDEX_HTML = """
                 progressText.textContent = Math.round(width) + '%';
 
                 if (width < 30) {
-                    progressStage.textContent = "Uploading Document...";
+                    progressStage.textContent = "Uploading Data...";
                 } else if (width < 70) {
-                    progressStage.textContent = "Running ML Algorithms...";
+                    progressStage.textContent = "Running Extraction Models...";
                 } else {
-                    progressStage.textContent = "Structuring Policy Points...";
+                    progressStage.textContent = "Structuring JSON...";
                 }
             }
         }, intervalTime);
@@ -361,167 +359,160 @@ INDEX_HTML = """
 </html>
 """
 
-RESULT_HTML = """
+RESULT_HTML = f"""
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
-  <title>{{ title }}</title>
+  <title>{{{{ title }}}}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-          colors: {
-            teal: { 50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4', 400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e', 800: '#115e59', 900: '#134e4a' },
-          },
-        }
-      }
-    }
-  </script>
+  {COMMON_HEAD}
 </head>
-<body class="bg-slate-50 text-slate-800">
+<body class="bg-background-dark text-gray-300">
 
-  <nav class="fixed w-full z-40 bg-white/80 backdrop-blur-md border-b border-slate-200">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex justify-between h-16 items-center">
+  <nav class="border-b border-gray-800 sticky top-0 z-50 bg-background-dark/80 backdrop-blur-md h-16">
+    <div class="w-full h-full max-w-7xl mx-auto px-6">
+      <div class="flex justify-between h-full items-center">
         <div class="flex items-center gap-3">
-          <div class="w-8 h-8 bg-gradient-to-tr from-teal-600 to-cyan-600 rounded-lg flex items-center justify-center text-white">
-            <i class="fa-solid fa-staff-snake text-sm"></i>
-          </div>
-          <span class="font-extrabold text-xl tracking-tight text-slate-900">
-            Med<span class="text-teal-600">.AI</span>
-          </span>
+            <a href="/" class="flex items-center space-x-2.5">
+                <div class="w-8 h-8 bg-white rounded-full flex items-center justify-center">
+                    <i class="fa-solid fa-staff-snake text-black text-lg"></i>
+                </div>
+                <span class="font-bold text-xl text-white">Med.AI</span>
+            </a>
+            <span class="text-gray-600">/</span>
+            <span class="text-sm font-mono text-afzal-purple">Report</span>
         </div>
-        <a href="{{ url_for('index') }}" class="inline-flex items-center px-4 py-2 text-xs font-bold rounded-full border border-slate-200 hover:border-teal-500 hover:text-teal-600 bg-white transition shadow-sm">
-          <i class="fa-solid fa-plus mr-2"></i> New Summary
+        <a href="{{{{ url_for('index') }}}}" class="inline-flex items-center px-4 py-2 text-xs font-semibold rounded bg-surface-dark border border-gray-700 hover:border-white text-white transition-colors">
+          <i class="fa-solid fa-plus mr-2"></i> New Analysis
         </a>
       </div>
     </div>
   </nav>
 
-  <main class="pt-24 pb-12 px-4">
-    <div class="max-w-7xl mx-auto grid lg:grid-cols-12 gap-8">
+  <main class="pt-10 pb-12 px-4 relative">
+    <div class="fixed top-20 left-10 w-64 h-64 bg-afzal-purple/10 rounded-full blur-[100px] pointer-events-none"></div>
+
+    <div class="max-w-7xl mx-auto grid lg:grid-cols-12 gap-8 relative z-10">
        
       <section class="lg:col-span-7 space-y-6">
-        <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 p-8">
+        <div class="glass-panel rounded-xl p-8 shadow-2xl">
            
-          <div class="flex flex-wrap items-start justify-between gap-4 mb-6 border-b border-slate-100 pb-6">
+          <div class="flex flex-wrap items-start justify-between gap-4 mb-6 border-b border-gray-800 pb-6">
             <div>
               <div class="flex items-center gap-2 mb-2">
-                  <span class="px-2 py-1 rounded-md bg-teal-50 text-teal-700 text-[0.65rem] font-bold uppercase tracking-wide border border-teal-100">
-                    {{ orig_type }} processed
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-gray-800 text-gray-400 border border-gray-700">
+                    {{{{ orig_type }}}} source
                   </span>
-                  {% if used_model == 'gemini' %}
-                  <span class="px-2 py-1 rounded-md bg-violet-50 text-violet-700 text-[0.65rem] font-bold uppercase tracking-wide border border-violet-100">
-                    <i class="fa-solid fa-sparkles mr-1"></i> ML (TF-IDF + TextRank)
+                  {{% if used_model == 'gemini' %}}
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-afzal-purple/10 text-afzal-purple border border-afzal-purple/20">
+                    <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Gemini 2.5
                   </span>
-                  {% else %}
-                  <span class="px-2 py-1 rounded-md bg-blue-50 text-blue-700 text-[0.65rem] font-bold uppercase tracking-wide border border-blue-100">
-                    ML (TF-IDF + TextRank)
+                  {{% else %}}
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    BERTSum + TextRank
                   </span>
-                  {% endif %}
+                  {{% endif %}}
               </div>
-              <h1 class="text-2xl font-extrabold text-slate-900 leading-tight">Policy Summary</h1>
+              <h1 class="text-2xl font-light text-white leading-tight">Extracted Summary</h1>
             </div>
              
-            {% if summary_pdf_url %}
-            <a href="{{ summary_pdf_url }}" class="inline-flex items-center px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-teal-600 transition shadow-lg">
+            {{% if summary_pdf_url %}}
+            <a href="{{{{ summary_pdf_url }}}}" class="inline-flex items-center px-4 py-2 rounded bg-white text-black text-xs font-bold hover:bg-gray-200 transition shadow-lg">
               <i class="fa-solid fa-file-arrow-down mr-2"></i> Download PDF
             </a>
-            {% endif %}
+            {{% endif %}}
           </div>
 
-          <div class="mb-8">
-            <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                <i class="fa-solid fa-align-left"></i> Abstract
+          <div class="mb-10">
+            <h2 class="text-xs font-bold text-afzal-blue uppercase tracking-widest mb-4 flex items-center gap-2">
+                <i class="fa-solid fa-quote-left"></i> Abstract
             </h2>
-            <div class="p-5 rounded-2xl bg-slate-50 border border-slate-100 text-sm leading-relaxed text-slate-700">
-                {{ abstract }}
+            <div class="p-5 rounded-lg bg-[#0a0a0c] border border-gray-800 text-sm leading-relaxed text-gray-300 font-light">
+                {{{{ abstract }}}}
             </div>
           </div>
 
-          {% if simple_text %}
+          {{% if simple_text %}}
           <div class="mb-8">
-            <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                <i class="fa-solid fa-file-lines"></i> Full Summary (Simple View)
+            <h2 class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">
+                Full Text Analysis
             </h2>
-            <div class="p-6 rounded-2xl bg-white border border-slate-100 text-sm leading-8 text-slate-800 shadow-sm text-justify">
-                {{ simple_text }}
+            <div class="p-6 rounded-lg bg-surface-dark border border-gray-800 text-sm leading-8 text-gray-300 text-justify">
+                {{{{ simple_text }}}}
             </div>
           </div>
-          {% endif %}
+          {{% endif %}}
 
-          {% if sections %}
-          <div class="space-y-6">
-            {% for sec in sections %}
-            <div>
-               <h3 class="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
-                 <span class="w-1.5 h-6 rounded-full bg-teal-500 block"></span>
-                 {{ sec.title }}
+          {{% if sections %}}
+          <div class="space-y-8">
+            {{% for sec in sections %}}
+            <div class="relative pl-4 border-l-2 border-gray-800 hover:border-afzal-purple transition-colors duration-300 group">
+               <h3 class="text-lg font-medium text-white mb-3 group-hover:text-afzal-purple transition-colors">
+                 {{{{ sec.title }}}}
                </h3>
-               <ul class="space-y-2">
-                 {% for bullet in sec.bullets %}
-                 <li class="flex items-start gap-3 text-sm text-slate-600">
-                    <i class="fa-solid fa-check mt-1 text-teal-500 text-xs"></i>
-                    <span>{{ bullet }}</span>
+               <ul class="space-y-3">
+                 {{% for bullet in sec.bullets %}}
+                 <li class="flex items-start gap-3 text-sm text-gray-400">
+                    <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0 group-hover:bg-afzal-purple"></span>
+                    <span>{{{{ bullet }}}}</span>
                  </li>
-                 {% endfor %}
+                 {{% endfor %}}
                </ul>
             </div>
-            {% endfor %}
+            {{% endfor %}}
           </div>
-          {% endif %}
+          {{% endif %}}
 
         </div>
       </section>
 
       <section class="lg:col-span-5 space-y-6">
          
-        <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 p-6">
-          <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Original Document</h2>
-          <div class="rounded-xl overflow-hidden border border-slate-200 bg-slate-100 h-[300px] relative group">
-             {% if orig_type == 'pdf' %}
-               <iframe src="{{ orig_url }}" class="w-full h-full" title="Original PDF"></iframe>
-             {% elif orig_type == 'text' %}
-               <div class="p-4 overflow-y-auto h-full text-xs font-mono">{{ orig_text }}</div>
-             {% elif orig_type == 'image' %}
-               <img src="{{ orig_url }}" class="w-full h-full object-contain bg-slate-800">
-             {% endif %}
-          </div>
+        <div class="glass-panel rounded-xl p-1 shadow-lg">
+            <div class="bg-[#0d1117] rounded-lg p-4 border border-gray-800 h-[300px] flex flex-col">
+                <div class="flex justify-between items-center mb-2">
+                     <h2 class="text-xs font-bold text-gray-500 uppercase tracking-widest">Source Preview</h2>
+                </div>
+                <div class="flex-1 overflow-hidden border border-gray-800 bg-[#050505] rounded relative">
+                     {{% if orig_type == 'pdf' %}}
+                       <iframe src="{{{{ orig_url }}}}" class="w-full h-full opacity-80 hover:opacity-100 transition-opacity" title="Original PDF"></iframe>
+                     {{% elif orig_type == 'text' %}}
+                       <div class="p-4 overflow-y-auto h-full text-xs font-mono text-gray-500">{{{{ orig_text }}}}</div>
+                     {{% elif orig_type == 'image' %}}
+                       <img src="{{{{ orig_url }}}}" class="w-full h-full object-contain">
+                     {{% endif %}}
+                </div>
+            </div>
         </div>
 
-        <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 p-6 flex flex-col h-[400px]">
-          <div class="mb-4">
-            <h2 class="text-sm font-bold text-slate-800 flex items-center gap-2">
-               <i class="fa-solid fa-robot text-teal-600"></i> Ask Gemini
-            </h2>
-            <p class="text-xs text-slate-400">Ask questions based on the document content.</p>
+        <div class="glass-panel rounded-xl p-6 flex flex-col h-[500px] border border-gray-800">
+          <div class="mb-4 flex items-center gap-2 pb-4 border-b border-gray-800">
+            <div class="w-8 h-8 rounded bg-gradient-to-br from-afzal-purple to-blue-600 flex items-center justify-center text-white shadow-lg">
+                <i class="fa-solid fa-robot text-sm"></i>
+            </div>
+            <div>
+                <h2 class="text-sm font-bold text-white">AI Assistant</h2>
+                <p class="text-[10px] text-gray-500">Powered by Gemini 1.5 Flash</p>
+            </div>
           </div>
            
-          <div id="chat-panel" class="flex-1 overflow-y-auto space-y-3 mb-4 pr-2 custom-scrollbar">
+          <div id="chat-panel" class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar">
              <div class="flex gap-3">
-                <div class="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-600 text-xs shrink-0"><i class="fa-solid fa-robot"></i></div>
-                <div class="bg-slate-100 rounded-2xl rounded-tl-none p-3 text-xs text-slate-700 leading-relaxed">
-                   Hello! I've analyzed this document. Ask me about specific goals, financing, or strategies.
+                <div class="w-6 h-6 rounded bg-surface-dark border border-gray-700 flex items-center justify-center text-afzal-purple text-[10px] shrink-0">AI</div>
+                <div class="bg-surface-dark border border-gray-800 rounded-lg rounded-tl-none p-3 text-xs text-gray-300 leading-relaxed shadow-sm">
+                   Document processed. I can answer specific questions regarding the extracted entities, figures, or policy mandates.
                 </div>
              </div>
           </div>
 
-          <div class="relative">
-             <input type="text" id="chat-input" class="w-full pl-4 pr-12 py-3 rounded-full bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 transition" placeholder="Type a question...">
-             <button id="chat-send" class="absolute right-1 top-1 p-2 bg-teal-600 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-teal-700 transition">
-                <i class="fa-solid fa-paper-plane text-xs"></i>
+          <div class="relative mt-auto">
+             <input type="text" id="chat-input" class="w-full pl-4 pr-12 py-3.5 rounded bg-[#0a0a0c] border border-gray-800 text-sm text-white focus:outline-none focus:border-afzal-purple focus:ring-1 focus:ring-afzal-purple transition placeholder-gray-600" placeholder="Ask a question about this policy...">
+             <button id="chat-send" class="absolute right-2 top-2 p-1.5 bg-white text-black rounded hover:bg-gray-200 transition">
+                <i class="fa-solid fa-arrow-up text-xs font-bold"></i>
              </button>
           </div>
-          <textarea id="doc-context" class="hidden">{{ doc_context }}</textarea>
+          <textarea id="doc-context" class="hidden">{{{{ doc_context }}}}</textarea>
         </div>
 
       </section>
@@ -539,11 +530,11 @@ RESULT_HTML = """
         div.className = role === 'user' ? 'flex gap-3 flex-row-reverse' : 'flex gap-3';
         
         const avatar = document.createElement('div');
-        avatar.className = `w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 ${role === 'user' ? 'bg-slate-800 text-white' : 'bg-teal-100 text-teal-600'}`;
-        avatar.innerHTML = role === 'user' ? '<i class="fa-solid fa-user"></i>' : '<i class="fa-solid fa-robot"></i>';
+        avatar.className = `w-6 h-6 rounded flex items-center justify-center text-[10px] shrink-0 border ${role === 'user' ? 'bg-white text-black border-white' : 'bg-surface-dark text-afzal-purple border-gray-700'}`;
+        avatar.textContent = role === 'user' ? 'ME' : 'AI';
         
         const bubble = document.createElement('div');
-        bubble.className = `max-w-[80%] rounded-2xl p-3 text-xs leading-relaxed ${role === 'user' ? 'bg-slate-800 text-white rounded-tr-none' : 'bg-slate-100 text-slate-700 rounded-tl-none'}`;
+        bubble.className = `max-w-[85%] rounded-lg p-3 text-xs leading-relaxed border ${role === 'user' ? 'bg-afzal-purple text-white border-afzal-purple rounded-tr-none' : 'bg-surface-dark text-gray-300 border-gray-800 rounded-tl-none'}`;
         bubble.textContent = text;
 
         div.appendChild(avatar);
@@ -558,8 +549,10 @@ RESULT_HTML = """
         addMsg('user', txt);
         input.value = '';
         
+        // Simulating typing indicator could go here
+        
         try {
-            const res = await fetch('{{ url_for("chat") }}', {
+            const res = await fetch('{{{{ url_for("chat") }}}}', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ message: txt, doc_text: docText })
@@ -567,7 +560,7 @@ RESULT_HTML = """
             const data = await res.json();
             addMsg('assistant', data.reply);
         } catch(e) {
-            addMsg('assistant', "Sorry, I encountered an error.");
+            addMsg('assistant', "Connection interrupted. Please try again.");
         }
     }
 
@@ -795,7 +788,7 @@ def summarize_extractive(raw_text: str, length_choice: str = "medium"):
             if start_idx >= end_idx:
                 # If bucket is empty (rare, small docs), just pick start
                 if start_idx < n:
-                     selected_idxs.append(start_idx)
+                      selected_idxs.append(start_idx)
                 continue
 
             for j in range(start_idx, end_idx):
