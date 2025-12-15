@@ -55,7 +55,7 @@ if GEMINI_API_KEY:
 
 # ---------------------- HTML TEMPLATES ---------------------- #
 
-# Replicating the design from index.html/about.html
+# NOTE: Removed 'f' prefix to avoid conflicts with CSS/JS curly braces.
 COMMON_HEAD = """
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
@@ -121,7 +121,7 @@ COMMON_HEAD = """
     </style>
 """
 
-INDEX_HTML = f"""
+INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
@@ -174,7 +174,7 @@ INDEX_HTML = f"""
         
         <div class="bg-background-dark/50 rounded-[0.7rem] p-6 md:p-10">
            
-          <form id="uploadForm" action="{{{{ url_for('summarize') }}}}" method="post" enctype="multipart/form-data" class="space-y-8">
+          <form id="uploadForm" action="{{ url_for('summarize') }}" method="post" enctype="multipart/form-data" class="space-y-8">
             
             <div class="group relative w-full h-64 border-2 border-dashed border-gray-700 rounded-lg bg-surface-dark/50 hover:bg-surface-dark hover:border-afzal-purple transition-all duration-300 flex flex-col items-center justify-center cursor-pointer overflow-hidden" id="drop-zone">
                
@@ -359,12 +359,12 @@ INDEX_HTML = f"""
 </html>
 """
 
-RESULT_HTML = f"""
+RESULT_HTML = """
 <!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
-  <title>{{{{ title }}}}</title>
+  <title>{{ title }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   {COMMON_HEAD}
 </head>
@@ -383,7 +383,7 @@ RESULT_HTML = f"""
             <span class="text-gray-600">/</span>
             <span class="text-sm font-mono text-afzal-purple">Report</span>
         </div>
-        <a href="{{{{ url_for('index') }}}}" class="inline-flex items-center px-4 py-2 text-xs font-semibold rounded bg-surface-dark border border-gray-700 hover:border-white text-white transition-colors">
+        <a href="{{ url_for('index') }}" class="inline-flex items-center px-4 py-2 text-xs font-semibold rounded bg-surface-dark border border-gray-700 hover:border-white text-white transition-colors">
           <i class="fa-solid fa-plus mr-2"></i> New Analysis
         </a>
       </div>
@@ -402,26 +402,26 @@ RESULT_HTML = f"""
             <div>
               <div class="flex items-center gap-2 mb-2">
                   <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-gray-800 text-gray-400 border border-gray-700">
-                    {{{{ orig_type }}}} source
+                    {{ orig_type }} source
                   </span>
-                  {{% if used_model == 'gemini' %}}
+                  {% if used_model == 'gemini' %}
                   <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-afzal-purple/10 text-afzal-purple border border-afzal-purple/20">
                     <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Gemini 2.5
                   </span>
-                  {{% else %}}
+                  {% else %}
                   <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-500/10 text-blue-400 border border-blue-500/20">
                     BERTSum + TextRank
                   </span>
-                  {{% endif %}}
+                  {% endif %}
               </div>
               <h1 class="text-2xl font-light text-white leading-tight">Extracted Summary</h1>
             </div>
              
-            {{% if summary_pdf_url %}}
-            <a href="{{{{ summary_pdf_url }}}}" class="inline-flex items-center px-4 py-2 rounded bg-white text-black text-xs font-bold hover:bg-gray-200 transition shadow-lg">
+            {% if summary_pdf_url %}
+            <a href="{{ summary_pdf_url }}" class="inline-flex items-center px-4 py-2 rounded bg-white text-black text-xs font-bold hover:bg-gray-200 transition shadow-lg">
               <i class="fa-solid fa-file-arrow-down mr-2"></i> Download PDF
             </a>
-            {{% endif %}}
+            {% endif %}
           </div>
 
           <div class="mb-10">
@@ -429,40 +429,40 @@ RESULT_HTML = f"""
                 <i class="fa-solid fa-quote-left"></i> Abstract
             </h2>
             <div class="p-5 rounded-lg bg-[#0a0a0c] border border-gray-800 text-sm leading-relaxed text-gray-300 font-light">
-                {{{{ abstract }}}}
+                {{ abstract }}
             </div>
           </div>
 
-          {{% if simple_text %}}
+          {% if simple_text %}
           <div class="mb-8">
             <h2 class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">
                 Full Text Analysis
             </h2>
             <div class="p-6 rounded-lg bg-surface-dark border border-gray-800 text-sm leading-8 text-gray-300 text-justify">
-                {{{{ simple_text }}}}
+                {{ simple_text }}
             </div>
           </div>
-          {{% endif %}}
+          {% endif %}
 
-          {{% if sections %}}
+          {% if sections %}
           <div class="space-y-8">
-            {{% for sec in sections %}}
+            {% for sec in sections %}
             <div class="relative pl-4 border-l-2 border-gray-800 hover:border-afzal-purple transition-colors duration-300 group">
                <h3 class="text-lg font-medium text-white mb-3 group-hover:text-afzal-purple transition-colors">
-                 {{{{ sec.title }}}}
+                 {{ sec.title }}
                </h3>
                <ul class="space-y-3">
-                 {{% for bullet in sec.bullets %}}
+                 {% for bullet in sec.bullets %}
                  <li class="flex items-start gap-3 text-sm text-gray-400">
                     <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0 group-hover:bg-afzal-purple"></span>
-                    <span>{{{{ bullet }}}}</span>
+                    <span>{{ bullet }}</span>
                  </li>
-                 {{% endfor %}}
+                 {% endfor %}
                </ul>
             </div>
-            {{% endfor %}}
+            {% endfor %}
           </div>
-          {{% endif %}}
+          {% endif %}
 
         </div>
       </section>
@@ -475,13 +475,13 @@ RESULT_HTML = f"""
                      <h2 class="text-xs font-bold text-gray-500 uppercase tracking-widest">Source Preview</h2>
                 </div>
                 <div class="flex-1 overflow-hidden border border-gray-800 bg-[#050505] rounded relative">
-                     {{% if orig_type == 'pdf' %}}
-                       <iframe src="{{{{ orig_url }}}}" class="w-full h-full opacity-80 hover:opacity-100 transition-opacity" title="Original PDF"></iframe>
-                     {{% elif orig_type == 'text' %}}
-                       <div class="p-4 overflow-y-auto h-full text-xs font-mono text-gray-500">{{{{ orig_text }}}}</div>
-                     {{% elif orig_type == 'image' %}}
-                       <img src="{{{{ orig_url }}}}" class="w-full h-full object-contain">
-                     {{% endif %}}
+                     {% if orig_type == 'pdf' %}
+                       <iframe src="{{ orig_url }}" class="w-full h-full opacity-80 hover:opacity-100 transition-opacity" title="Original PDF"></iframe>
+                     {% elif orig_type == 'text' %}
+                       <div class="p-4 overflow-y-auto h-full text-xs font-mono text-gray-500">{{ orig_text }}</div>
+                     {% elif orig_type == 'image' %}
+                       <img src="{{ orig_url }}" class="w-full h-full object-contain">
+                     {% endif %}
                 </div>
             </div>
         </div>
@@ -512,7 +512,7 @@ RESULT_HTML = f"""
                 <i class="fa-solid fa-arrow-up text-xs font-bold"></i>
              </button>
           </div>
-          <textarea id="doc-context" class="hidden">{{{{ doc_context }}}}</textarea>
+          <textarea id="doc-context" class="hidden">{{ doc_context }}</textarea>
         </div>
 
       </section>
@@ -552,7 +552,7 @@ RESULT_HTML = f"""
         // Simulating typing indicator could go here
         
         try {
-            const res = await fetch('{{{{ url_for("chat") }}}}', {
+            const res = await fetch('{{ url_for("chat") }}', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ message: txt, doc_text: docText })
@@ -571,6 +571,11 @@ RESULT_HTML = f"""
 </body>
 </html>
 """
+
+# Inject Common Head properly (Using replace instead of f-string to allow JS curly braces)
+INDEX_HTML = INDEX_HTML.replace("{COMMON_HEAD}", COMMON_HEAD)
+RESULT_HTML = RESULT_HTML.replace("{COMMON_HEAD}", COMMON_HEAD)
+
 
 # ---------------------- TEXT UTILITIES & ML CORE ---------------------- #
 
