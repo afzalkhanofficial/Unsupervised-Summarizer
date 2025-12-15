@@ -55,7 +55,6 @@ if GEMINI_API_KEY:
 
 # ---------------------- HTML TEMPLATES ---------------------- #
 
-# Exact styling and configuration from about.html
 COMMON_HEAD = """
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
@@ -73,6 +72,9 @@ COMMON_HEAD = """
                         "surface-dark": "#161b22",
                         "afzal-purple": "#8C4FFF",
                         "afzal-blue": "#4D9CFF",
+                        "afzal-red": "#FF5757",
+                        "text-light": "#1F2937",
+                        "text-dark": "#F3F4F6",
                     },
                     fontFamily: {
                         sans: ['Inter', 'sans-serif'],
@@ -81,6 +83,21 @@ COMMON_HEAD = """
                     backgroundImage: {
                         'grid-pattern-dark': "linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px)",
                         'radial-glow': "radial-gradient(circle at center, rgba(140, 79, 255, 0.15) 0%, transparent 70%)",
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse-opacity 4s ease-in-out infinite',
+                        'float': 'float 6s ease-in-out infinite',
+                        'spin-slow': 'spin 3s linear infinite',
+                    },
+                    keyframes: {
+                        'pulse-opacity': {
+                            '0%, 100%': { opacity: 0.2, transform: 'scale(1)' },
+                            '50%': { opacity: 0.5, transform: 'scale(1.1)' },
+                        },
+                        'float': {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
                     }
                 },
             },
@@ -93,9 +110,12 @@ COMMON_HEAD = """
         ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
 
+        body { background-color: #0D0D0F; color: #F3F4F6; }
+
         .perspective-1000 { perspective: 1000px; }
         .transform-style-3d { transform-style: preserve-3d; }
         
+        /* Glass Card Style matching about.html */
         .glossary-card {
             border-radius: 0.75rem;
             padding: 2rem;
@@ -103,8 +123,8 @@ COMMON_HEAD = """
             overflow: hidden;
             transition: transform 0.1s ease-out, box-shadow 0.3s ease;
             transform-style: preserve-3d;
-            background-color: #161b22; /* surface-dark */
-            border: 1px solid #1f2937;
+            background-color: #161b22;
+            border: 1px solid #374151;
         }
 
         .glossary-card:hover {
@@ -113,17 +133,13 @@ COMMON_HEAD = """
             border-color: rgba(140, 79, 255, 0.5);
         }
 
-        .glossary-icon-bg { transform: translateZ(20px); }
-        .glossary-card h4 { transform: translateZ(15px); }
-        .glossary-card p { transform: translateZ(10px); }
-
+        /* Initial state for fade-up animation */
         .fade-up {
             opacity: 0;
             transform: translateY(20px);
             transition: opacity 0.6s ease-out, transform 0.6s ease-out;
         }
         
-        /* Custom Upload Zone Styling */
         .upload-zone {
             background-image: url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' rx='12' ry='12' stroke='%23374151FF' stroke-width='2' stroke-dasharray='12%2c 12' stroke-dashoffset='0' stroke-linecap='square'/%3e%3c/svg%3e");
             transition: all 0.3s ease;
@@ -156,8 +172,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Fade Up Animation
-    const observerOptions = { threshold: 0.15, rootMargin: "0px 0px -40px 0px" };
+    // Fade Up Animation Observer
+    const observerOptions = { threshold: 0.1, rootMargin: "0px 0px -20px 0px" };
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
@@ -170,6 +186,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const fadeElements = document.querySelectorAll('.fade-up');
     fadeElements.forEach(el => { observer.observe(el); });
+    
+    // Fallback: make elements visible if JS fails or observer is slow
+    setTimeout(() => {
+        fadeElements.forEach(el => {
+            if(getComputedStyle(el).opacity === '0') {
+                el.style.opacity = '1';
+                el.style.transform = 'translateY(0)';
+            }
+        });
+    }, 2000);
 });
 </script>
 """
@@ -594,8 +620,11 @@ RESULT_HTML = """
         panel.appendChild(div);
         panel.scrollTop = panel.scrollHeight;
         
-        // Trigger animation
-        setTimeout(() => { div.style.opacity = 1; div.style.transform = 'translateY(0)'; }, 10);
+        // Trigger animation explicitly
+        setTimeout(() => { 
+            div.style.opacity = 1; 
+            div.style.transform = 'translateY(0)'; 
+        }, 50);
     }
 
     async function sendMessage() {
