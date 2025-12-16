@@ -149,27 +149,22 @@ COMMON_HEAD = """
             background-color: rgba(22, 27, 34, 0.8);
         }
 
-        /* STRICT Google Translate Hiding Mechanism */
-        /* Hides the top banner iframe */
-        .goog-te-banner-frame.skiptranslate { display: none !important; } 
-        
-        /* Reset Body top pushed by Google */
-        body { top: 0px !important; } 
-        
-        /* Ensure the element is loaded but invisible */
-        #google_translate_element { 
-            width: 0px; 
-            height: 0px; 
-            overflow: hidden; 
-            position: absolute; 
-            left: -9999px;
-            opacity: 0;
+        /* ==============================
+           FORCE HIDE GOOGLE UI (Robust)
+           ============================== */
+        .goog-logo-link,
+        .goog-te-gadget,
+        .goog-te-banner-frame,
+        .goog-te-balloon-frame,
+        .goog-te-combo {
+            display: none !important;
         }
-
-        /* Hides tooltips */
-        .goog-tooltip { display: none !important; }
-        .goog-tooltip:hover { display: none !important; }
-        .goog-text-highlight { background-color: transparent !important; border: none !important; box-shadow: none !important; }
+        body > .skiptranslate {
+            display: none !important;
+        }
+        body {
+            top: 0 !important;
+        }
         
         /* Custom Select Styles */
         .custom-select-wrapper { position: relative; user-select: none; }
@@ -234,7 +229,7 @@ INDEX_HTML = """
     <title>Workspace | Med.AI</title>
     {COMMON_HEAD}
 </head>
-<body class="font-sans antialiased text-gray-300 bg-background-dark overflow-x-hidden selection:bg-afzal-purple selection:text-white">
+<body class="font-sans antialiased text-gray-300 bg-background-dark overflow-x-hidden selection:bg-afzal-purple selection:text-white" translate="no">
 
 <nav class="border-b border-gray-800 sticky top-0 z-50 bg-background-dark/80 backdrop-blur-md h-16">
     <div class="w-full h-full">
@@ -475,7 +470,7 @@ RESULT_HTML = """
     <title>{{ title }} | Med.AI</title>
     {COMMON_HEAD}
 </head>
-<body class="font-sans antialiased text-gray-300 bg-background-dark overflow-x-hidden selection:bg-afzal-purple selection:text-white">
+<body class="font-sans antialiased text-gray-300 bg-background-dark overflow-x-hidden selection:bg-afzal-purple selection:text-white" translate="no">
 
 <nav class="border-b border-gray-800 sticky top-0 z-50 bg-background-dark/80 backdrop-blur-md h-16">
     <div class="w-full h-full max-w-7xl mx-auto px-6">
@@ -492,11 +487,11 @@ RESULT_HTML = """
             </div>
             
             <div class="flex items-center gap-4">
-                <div class="relative group custom-select-wrapper z-50">
+                <div class="relative group custom-select-wrapper">
                     <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
                         <i class="fa-solid fa-language"></i>
                     </div>
-                    <select id="language-select" class="appearance-none bg-[#161b22] border border-gray-700 text-gray-300 text-xs font-bold uppercase tracking-widest rounded px-4 pl-9 py-2 pr-8 focus:outline-none focus:border-afzal-purple cursor-pointer hover:text-white transition-colors w-32">
+                    <select id="languageSelect" class="appearance-none bg-[#161b22] border border-gray-700 text-gray-300 text-xs font-bold uppercase tracking-widest rounded px-4 pl-9 py-2 pr-8 focus:outline-none focus:border-afzal-purple cursor-pointer hover:text-white transition-colors w-32">
                         <option value="en" selected>English</option>
                         <option value="hi">Hindi</option>
                         <option value="te">Telugu</option>
@@ -506,7 +501,7 @@ RESULT_HTML = """
                     </div>
                 </div>
 
-                <div id="google_translate_element"></div>
+                <div id="google_translate_element" class="hidden absolute"></div>
 
                 <a href="{{ url_for('index') }}" class="group relative z-[1] inline-flex items-center cursor-pointer transition-colors text-xs font-bold uppercase tracking-widest text-white hover:text-afzal-purple border border-gray-700 hover:border-afzal-purple px-4 py-2 rounded">
                     <i class="fa-solid fa-plus mr-2"></i> New
@@ -523,7 +518,7 @@ RESULT_HTML = """
         
       <section class="lg:col-span-7 space-y-6">
         
-        <div class="glossary-card bg-surface-dark border border-gray-800 p-8 rounded-2xl shadow-lg">
+        <div id="translate-text" class="glossary-card bg-surface-dark border border-gray-800 p-8 rounded-2xl shadow-lg" translate="yes">
            <div class="flex flex-wrap items-start justify-between gap-4 mb-6 border-b border-gray-700 pb-6">
              <div>
                 <div class="flex items-center gap-2 mb-3">
@@ -713,37 +708,32 @@ RESULT_HTML = """
     input.onkeypress = (e) => { if(e.key === 'Enter') sendMessage(); }
 </script>
 
-<script type="text/javascript">
-function googleTranslateElementInit() {
-  new google.translate.TranslateElement({
-    pageLanguage: 'en',
-    includedLanguages: 'en,hi,te',
-    layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
-    autoDisplay: false,
-  }, 'google_translate_element');
-}
+<script>
+    let translateReady = false;
 
-// Logic to bridge custom dropdown to Google's hidden dropdown
-document.addEventListener('DOMContentLoaded', function() {
-    const customSelect = document.getElementById('language-select');
-    
-    // Poll for Google's dropdown because it loads asynchronously
-    const checkGoogleLoad = setInterval(function() {
-        const googleSelect = document.querySelector(".goog-te-combo");
-        if (googleSelect) {
-            clearInterval(checkGoogleLoad);
-            
-            // Bind change event
-            customSelect.addEventListener('change', function() {
-                const selectedLanguage = this.value;
-                googleSelect.value = selectedLanguage;
-                googleSelect.dispatchEvent(new Event("change"));
-            });
-        }
-    }, 500); // Check every 500ms
-});
+    function googleTranslateElementInit() {
+        new google.translate.TranslateElement({
+            pageLanguage: 'en',
+            includedLanguages: 'en,hi,te',
+            autoDisplay: false
+        }, 'google_translate_element');
+
+        // Delay to ensure combo is created
+        setTimeout(() => translateReady = true, 500);
+    }
+
+    document.getElementById("languageSelect").addEventListener("change", function () {
+        if (!translateReady) return;
+
+        const combo = document.querySelector(".goog-te-combo");
+        if (!combo) return;
+
+        combo.value = this.value;
+        combo.dispatchEvent(new Event("change"));
+    });
 </script>
-<script type="text/javascript" src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
+
+<script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 
 {COMMON_SCRIPTS}
 </body>
