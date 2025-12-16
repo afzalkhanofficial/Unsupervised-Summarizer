@@ -262,7 +262,7 @@ INDEX_HTML = """
             <span class="text-transparent bg-clip-text bg-gradient-to-r from-afzal-purple via-white to-afzal-blue">TF-IDF and TextRank</span>
         </h1>
         <p class="text-xl text-gray-400 leading-relaxed max-w-2xl mx-auto font-light">
-            Upload healthcare policy briefs (PDF, Text, Images). Our ML engine extracts entities, categorizes clauses, and generates structured summaries.
+            Upload healthcare policy briefs. Our ML engine extracts entities, categorizes clauses, and generates structured summaries.
         </p>
     </div>
 </header>
@@ -513,15 +513,15 @@ RESULT_HTML = """
                     </span>
                     {% if used_model == 'gemini' %}
                     <span class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide bg-afzal-purple/10 text-afzal-purple border border-afzal-purple/20">
-                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Gemini 1.5 Flash
+                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> TF-IDF + TextRank
                     </span>
                     {% else %}
                     <span class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                        BERTSum + TextRank
+                        TF-IDF + TextRank
                     </span>
                     {% endif %}
                 </div>
-                <h1 class="text-3xl font-light text-white leading-tight">Executive Summary</h1>
+                <h1 class="text-3xl font-light text-white leading-tight">Policy Summary</h1>
              </div>
              
              <div class="flex items-center gap-4">
