@@ -258,7 +258,7 @@ INDEX_HTML = """
 
     <div class="max-w-4xl mx-auto px-4 text-center relative z-10 fade-up">
         <h1 class="text-5xl md:text-7xl font-semibold text-white mb-6 leading-tight tracking-tight">
-            Unsupervised Summarization <br>
+            Summarize Using <br>
             <span class="text-transparent bg-clip-text bg-gradient-to-r from-afzal-purple via-white to-afzal-blue">TF-IDF and TextRank</span>
         </h1>
         <p class="text-xl text-gray-400 leading-relaxed max-w-2xl mx-auto font-light">
@@ -487,20 +487,6 @@ RESULT_HTML = """
             </div>
             
             <div class="flex items-center gap-4">
-                <div class="relative group custom-select-wrapper">
-                    <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
-                        <i class="fa-solid fa-language"></i>
-                    </div>
-                    <select id="languageSelect" class="appearance-none bg-[#161b22] border border-gray-700 text-gray-300 text-xs font-bold uppercase tracking-widest rounded px-4 pl-9 py-2 pr-8 focus:outline-none focus:border-afzal-purple cursor-pointer hover:text-white transition-colors w-32">
-                        <option value="en" selected>English</option>
-                        <option value="hi">Hindi</option>
-                        <option value="te">Telugu</option>
-                    </select>
-                    <div class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
-                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
-                    </div>
-                </div>
-
                 <div id="google_translate_element" class="hidden absolute"></div>
 
                 <a href="{{ url_for('index') }}" class="group relative z-[1] inline-flex items-center cursor-pointer transition-colors text-xs font-bold uppercase tracking-widest text-white hover:text-afzal-purple border border-gray-700 hover:border-afzal-purple px-4 py-2 rounded">
@@ -527,21 +513,38 @@ RESULT_HTML = """
                     </span>
                     {% if used_model == 'gemini' %}
                     <span class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide bg-afzal-purple/10 text-afzal-purple border border-afzal-purple/20">
-                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> TF-IDF + TextRank
+                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Gemini 1.5 Flash
                     </span>
                     {% else %}
                     <span class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                        TF-IDF + TextRank
+                        BERTSum + TextRank
                     </span>
                     {% endif %}
                 </div>
-                <h1 class="text-3xl font-light text-white leading-tight">Policy Summary</h1>
+                <h1 class="text-3xl font-light text-white leading-tight">Executive Summary</h1>
              </div>
-             {% if summary_pdf_url %}
-             <a href="{{ summary_pdf_url }}" class="flex items-center justify-center w-10 h-10 rounded-full bg-white text-black hover:bg-afzal-purple hover:text-white transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)]">
-                <i class="fa-solid fa-file-arrow-down"></i>
-             </a>
-             {% endif %}
+             
+             <div class="flex items-center gap-4">
+                 <div class="relative group custom-select-wrapper">
+                    <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
+                        <i class="fa-solid fa-language"></i>
+                    </div>
+                    <select id="languageSelect" class="appearance-none bg-[#161b22] border border-gray-700 text-gray-300 text-xs font-bold uppercase tracking-widest rounded px-4 pl-9 py-2 pr-8 focus:outline-none focus:border-afzal-purple cursor-pointer hover:text-white transition-colors w-32">
+                        <option value="en" selected>English</option>
+                        <option value="hi">Hindi</option>
+                        <option value="te">Telugu</option>
+                    </select>
+                    <div class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
+                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                    </div>
+                </div>
+
+                 {% if summary_pdf_url %}
+                 <a href="{{ summary_pdf_url }}" class="flex items-center justify-center w-10 h-10 rounded-full bg-white text-black hover:bg-afzal-purple hover:text-white transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)]">
+                    <i class="fa-solid fa-file-arrow-down"></i>
+                 </a>
+                 {% endif %}
+             </div>
            </div>
 
            <div class="mb-8">
@@ -1054,7 +1057,11 @@ def process_images_with_gemini(image_paths: List[str]):
         # Open all images
         images = []
         for p in image_paths:
-            images.append(Image.open(p))
+            img = Image.open(p)
+            # Optimize image size before processing to speed up
+            # Max dimension 1024 to reduce payload size while keeping text readable
+            img.thumbnail((1024, 1024))
+            images.append(img)
         
         prompt = """
         Analyze these images (pages of a policy document). 
