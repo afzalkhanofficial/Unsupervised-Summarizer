@@ -930,7 +930,7 @@ def process_images_with_gemini(image_paths: List[str]):
         return None, "Gemini API Key missing."
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash") # Updated to 1.5 Flash for multi-modal
+        model = genai.GenerativeModel("gemini-2.5-flash") # Updated to 1.5 Flash for multi-modal
         
         content_parts = ["Analyze these policy document images. Extract text and create a structured summary. Output strict JSON: { \"extracted_text\": \"...\", \"summary_structure\": { \"abstract\": \"...\", \"sections\": [ { \"title\": \"...\", \"bullets\": [\"...\"] } ] } }"]
         
@@ -1032,7 +1032,7 @@ def chat():
         return jsonify({"reply": "Gemini Key not configured."})
         
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         chat = model.start_chat(history=[])
         prompt = f"Context from document: {doc_text[:30000]}\n\nUser Question: {message}\nAnswer concisely."
         resp = chat.send_message(prompt)
