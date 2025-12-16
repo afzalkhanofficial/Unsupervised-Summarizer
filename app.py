@@ -150,12 +150,22 @@ COMMON_HEAD = """
         }
 
         /* STRICT Google Translate Hiding Mechanism */
-        /* Hides the top banner */
+        /* Hides the top banner iframe */
         .goog-te-banner-frame.skiptranslate { display: none !important; } 
-        /* Hides the original widget element completely */
-        #google_translate_element { display: none !important; }
-        /* Prevents body shift */
+        
+        /* Reset Body top pushed by Google */
         body { top: 0px !important; } 
+        
+        /* Ensure the element is loaded but invisible */
+        #google_translate_element { 
+            width: 0px; 
+            height: 0px; 
+            overflow: hidden; 
+            position: absolute; 
+            left: -9999px;
+            opacity: 0;
+        }
+
         /* Hides tooltips */
         .goog-tooltip { display: none !important; }
         .goog-tooltip:hover { display: none !important; }
@@ -163,7 +173,6 @@ COMMON_HEAD = """
         
         /* Custom Select Styles */
         .custom-select-wrapper { position: relative; user-select: none; }
-        .custom-select-arrow { pointer-events: none; }
     </style>
 """
 
@@ -483,7 +492,7 @@ RESULT_HTML = """
             </div>
             
             <div class="flex items-center gap-4">
-                <div class="relative group custom-select-wrapper">
+                <div class="relative group custom-select-wrapper z-50">
                     <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
                         <i class="fa-solid fa-language"></i>
                     </div>
@@ -497,7 +506,7 @@ RESULT_HTML = """
                     </div>
                 </div>
 
-                <div id="google_translate_element" class="hidden absolute"></div>
+                <div id="google_translate_element"></div>
 
                 <a href="{{ url_for('index') }}" class="group relative z-[1] inline-flex items-center cursor-pointer transition-colors text-xs font-bold uppercase tracking-widest text-white hover:text-afzal-purple border border-gray-700 hover:border-afzal-purple px-4 py-2 rounded">
                     <i class="fa-solid fa-plus mr-2"></i> New
@@ -708,7 +717,7 @@ RESULT_HTML = """
 function googleTranslateElementInit() {
   new google.translate.TranslateElement({
     pageLanguage: 'en',
-    includedLanguages: 'en,hi,te', // Only load specific languages to optimize
+    includedLanguages: 'en,hi,te',
     layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
     autoDisplay: false,
   }, 'google_translate_element');
@@ -731,7 +740,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 googleSelect.dispatchEvent(new Event("change"));
             });
         }
-    }, 500);
+    }, 500); // Check every 500ms
 });
 </script>
 <script type="text/javascript" src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
