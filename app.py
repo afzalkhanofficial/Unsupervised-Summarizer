@@ -243,10 +243,10 @@ INDEX_HTML = """
                 </a>
             </div>
             <div class="hidden lg:flex justify-center">
-                 <span class="text-afzal-purple font-mono text-xs uppercase tracking-widest border border-afzal-purple/30 bg-afzal-purple/10 px-3 py-1 rounded">Workspace v2.0</span>
+                 <span class="text-afzal-purple font-mono text-xs uppercase tracking-widest border border-afzal-purple/30 bg-afzal-purple/10 px-3 py-1 rounded">Workspace : Unsupervised Text Summarization</span>
             </div>
             <div class="flex items-center justify-end h-full pr-6 lg:pr-8">
-                 <a href="#" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
+                 <a href="#" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">About</a>
             </div>
         </div>
     </div>
@@ -258,11 +258,11 @@ INDEX_HTML = """
 
     <div class="max-w-4xl mx-auto px-4 text-center relative z-10 fade-up">
         <h1 class="text-5xl md:text-7xl font-semibold text-white mb-6 leading-tight tracking-tight">
-            Intelligent <br>
-            <span class="text-transparent bg-clip-text bg-gradient-to-r from-afzal-purple via-white to-afzal-blue">Policy Analysis.</span>
+            Unsupervised Summarization <br>
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-afzal-purple via-white to-afzal-blue">TF-IDF and TextRank</span>
         </h1>
         <p class="text-xl text-gray-400 leading-relaxed max-w-2xl mx-auto font-light">
-            Upload healthcare policy briefs (PDF, Text, or Multiple Images). Our NLP engine extracts entities, categorizes clauses, and generates structured summaries.
+            Upload healthcare policy briefs (PDF, Text, Images). Our ML engine extracts entities, categorizes clauses, and generates structured summaries.
         </p>
     </div>
 </header>
@@ -282,7 +282,7 @@ INDEX_HTML = """
                         </div>
                         <div>
                             <p class="text-lg font-bold text-white">Click to upload or Drag & Drop</p>
-                            <p class="text-sm text-gray-500 font-mono mt-1">Supported: PDF, TXT, Multiple Images</p>
+                            <p class="text-sm text-gray-500 font-mono mt-1">Supported: PDF, TXT, Images</p>
                         </div>
                     </div>
 
@@ -298,7 +298,7 @@ INDEX_HTML = """
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="bg-black/20 rounded-lg p-4 border border-gray-800">
-                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Length</label>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Summary Length</label>
                         <div class="flex gap-2">
                             <label class="flex-1 cursor-pointer">
                                 <input type="radio" name="length" value="short" class="peer hidden">
@@ -527,15 +527,15 @@ RESULT_HTML = """
                     </span>
                     {% if used_model == 'gemini' %}
                     <span class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide bg-afzal-purple/10 text-afzal-purple border border-afzal-purple/20">
-                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Gemini 1.5 Flash
+                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> TF-IDF + TextRank
                     </span>
                     {% else %}
                     <span class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                        BERTSum + TextRank
+                        TF-IDF + TextRank
                     </span>
                     {% endif %}
                 </div>
-                <h1 class="text-3xl font-light text-white leading-tight">Executive Summary</h1>
+                <h1 class="text-3xl font-light text-white leading-tight">Policy Summary</h1>
              </div>
              {% if summary_pdf_url %}
              <a href="{{ summary_pdf_url }}" class="flex items-center justify-center w-10 h-10 rounded-full bg-white text-black hover:bg-afzal-purple hover:text-white transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)]">
@@ -637,8 +637,8 @@ RESULT_HTML = """
             
             <div id="chat-panel" class="flex-1 overflow-y-auto p-4 space-y-4 bg-[#0d1117]">
                  <div class="flex gap-3">
-                    <div class="w-8 h-8 rounded-full bg-[#1c2128] border border-gray-700 flex items-center justify-center text-afzal-purple text-xs shrink-0">
-                        <i class="fa-solid fa-sparkles"></i>
+                    <div class="w-8 h-8 rounded-full bg-afzal-purple border border-afzal-purple flex items-center justify-center text-white text-xs shrink-0 shadow-lg">
+                        <i class="fa-solid fa-robot"></i>
                     </div>
                     <div class="bg-[#1c2128] border border-gray-700 rounded-2xl rounded-tl-none p-3 text-xs text-gray-300 leading-relaxed max-w-[85%]">
                        Analysis complete. I have context on the document above. Ask me about specific figures, dates, or compliance requirements.
@@ -672,8 +672,8 @@ RESULT_HTML = """
         div.className = role === 'user' ? 'flex gap-3 flex-row-reverse' : 'flex gap-3';
         
         const avatar = document.createElement('div');
-        avatar.className = `w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border ${role === 'user' ? 'bg-white text-black border-white' : 'bg-[#1c2128] text-afzal-purple border-gray-700'}`;
-        avatar.innerHTML = role === 'user' ? '<i class="fa-solid fa-user"></i>' : '<i class="fa-solid fa-sparkles"></i>';
+        avatar.className = `w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border shadow-md ${role === 'user' ? 'bg-white text-black border-white' : 'bg-afzal-purple text-white border-afzal-purple'}`;
+        avatar.innerHTML = role === 'user' ? '<i class="fa-solid fa-user"></i>' : '<i class="fa-solid fa-robot"></i>';
         
         const bubble = document.createElement('div');
         bubble.className = `max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed border ${role === 'user' ? 'bg-afzal-purple text-white border-afzal-purple rounded-tr-none' : 'bg-[#1c2128] text-gray-300 border-gray-700 rounded-tl-none'}`;
@@ -1049,7 +1049,7 @@ def process_images_with_gemini(image_paths: List[str]):
         return None, "Gemini API Key missing."
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
         
         # Open all images
         images = []
@@ -1169,7 +1169,7 @@ def chat():
         return jsonify({"reply": "Gemini Key not configured."})
         
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
         chat = model.start_chat(history=[])
         prompt = f"Context from document: {doc_text[:30000]}\n\nUser Question: {message}\nAnswer concisely."
         resp = chat.send_message(prompt)
