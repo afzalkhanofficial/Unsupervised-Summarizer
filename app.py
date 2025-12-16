@@ -1059,8 +1059,8 @@ def process_images_with_gemini(image_paths: List[str]):
         for p in image_paths:
             img = Image.open(p)
             # Optimize image size before processing to speed up
-            # Max dimension 512 to reduce payload size while keeping text readable
-            img.thumbnail((512, 512))
+            # Max dimension 256 to reduce payload size while keeping text readable
+            img.thumbnail((256, 256))
             images.append(img)
         
         prompt = """
