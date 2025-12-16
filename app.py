@@ -258,7 +258,7 @@ INDEX_HTML = """
 
     <div class="max-w-4xl mx-auto px-4 text-center relative z-10 fade-up">
         <h1 class="text-5xl md:text-7xl font-semibold text-white mb-6 leading-tight tracking-tight">
-            Summarize Using <br>
+            UNSUPERVISED <br>
             <span class="text-transparent bg-clip-text bg-gradient-to-r from-afzal-purple via-white to-afzal-blue">TF-IDF and TextRank</span>
         </h1>
         <p class="text-xl text-gray-400 leading-relaxed max-w-2xl mx-auto font-light">
@@ -1059,8 +1059,8 @@ def process_images_with_gemini(image_paths: List[str]):
         for p in image_paths:
             img = Image.open(p)
             # Optimize image size before processing to speed up
-            # Max dimension 1024 to reduce payload size while keeping text readable
-            img.thumbnail((1024, 1024))
+            # Max dimension 512 to reduce payload size while keeping text readable
+            img.thumbnail((512, 512))
             images.append(img)
         
         prompt = """
